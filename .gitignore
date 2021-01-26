@@ -1,0 +1,6 @@
+build/
+.cache
+src/.ccls-cache/
+src/compile_commands.json
+src/.clangd
+dep/

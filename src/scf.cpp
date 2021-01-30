@@ -1,78 +1,28 @@
 #include "scf.hpp"
+#include "util.hpp"
 
+#include <Eigen/Dense>
 #include <omp.h>
 
 #include <assert.h>
-#include <chrono>
 #include <cmath>
 #include <iostream>
-#include <random>
 #include <vector>
 
-double scf::mc_integrator(std::function<double(const std::vector<double>&)> fn,
-    const unsigned long n, const std::size_t dim, const std::vector<double> bounds)
-{
-    assert(dim * 2 == bounds.size());
-
-    unsigned seed = std::chrono::system_clock::now().time_since_epoch().count();
-    std::default_random_engine generator(seed);
-
-    std::vector<std::uniform_real_distribution<double>> distributions;
-    distributions.reserve(dim);
-    for (unsigned int i = 0; i < dim; i++)
-        distributions.push_back(
-            std::uniform_real_distribution<double>(bounds[i * 2], bounds[i * 2 + 1]));
-
-    double sum = 0;
-
-    std::vector<double> values(dim);
-
-    for (unsigned long i = 0; i < n; i++) {
-        // Generate values for each dimension within bounds.
-        for (unsigned int j = 0; j < dim; j++)
-            values[j] = distributions[j](generator);
-
-        sum += fn(values);
-    }
-
-    double volume = 1;
-    for (unsigned int i = 0; i < dim*2; i += 2)
-        volume *= bounds[i + 1] - bounds[i];
-
-    sum *= volume / n;
-
-    return sum;
-}
-
-double scf::gto(const vec3& coord, const vec3& center, const double c, const double alpha)
-{
-    double distance_square = (coord.x - center.x) * (coord.x - center.x)
-        + (coord.y - center.y) * (coord.y - center.y) + (coord.z - center.z) * (coord.z - center.z);
-    return c * std::exp(-alpha * distance_square);
-}
-
-double scf::gto_gradient(const vec3& coord, const vec3& center, const double c, const double alpha)
-{
-    double x = coord.x, y = coord.y, z = coord.z, x0 = center.x, y0 = center.y, z0 = center.z;
-
-    double distance_square = (x - x0) * (x - x0) + (y - y0) * (y - y0) + (z - z0) * (z - z0);
-    double xterm = 2 * alpha * x * x - 4 * x0 * alpha * x + 2 * x0 * x0 * alpha;
-    double yterm = 2 * alpha * y * y - 4 * y0 * alpha * y + 2 * y0 * y0 * alpha;
-    double zterm = 2 * alpha * z * z - 4 * z0 * alpha * z + 2 * z0 * z0 * alpha;
-    return 2 * alpha * c * (xterm + yterm + zterm - 3) * std::exp(-alpha * distance_square);
-}
-
 scf::HartreeFockSolver::HartreeFockSolver(std::vector<BasisFunction> basis_functions,
-    std::vector<BasisFunction> basis_gradients, std::vector<std::pair<vec3, double>> nuclei)
+    std::vector<BasisFunction> basis_gradients, std::vector<std::pair<vec3, double>> nuclei,
+    const unsigned int number_of_electrons)
     : m_basisFunctions(basis_functions)
     , m_basisGradients(basis_gradients)
     , m_nuclei(nuclei)
     , m_size(basis_functions.size())
-    , m_kinEnergy(m_basisFunctions.size(), m_basisFunctions.size())
-    , m_potEnergies(
-          m_nuclei.size(), Eigen::MatrixXd(m_basisFunctions.size(), m_basisFunctions.size()))
-    , m_electronRepulsion(m_basisFunctions.size(), m_basisFunctions.size())
-    , m_repulsionIntegrals(m_basisFunctions.size())
+    , m_electrons(number_of_electrons)
+    , m_density(m_electrons, m_electrons)
+    , m_overlap(m_size, m_size)
+    , m_kinEnergy(m_size, m_size)
+    , m_potEnergies(m_nuclei.size(), Eigen::MatrixXd(m_size, m_size))
+    , m_electronRepulsion(m_size, m_size)
+    , m_repulsionIntegrals(m_size)
 {
     assert(m_basisFunctions.size() == m_basisGradients.size());
 
@@ -94,17 +44,29 @@ void scf::HartreeFockSolver::calcKineticEnergy()
     for (unsigned int r = 0; r < m_basisFunctions.size(); r++)
         for (unsigned int s = 0; s < m_basisFunctions.size(); s++) {
 
-            auto f = [=](const std::vector<double>& values) -> double {
+            auto fn = [=](const std::vector<double>& values) -> double {
                 return m_basisFunctions[r]({ values[0], values[1], values[2] })
                     * m_basisGradients[s]({ values[0], values[1], values[2] });
             };
 
-            m_kinEnergy(r, s) = -0.5
-                * mc_integrator(f, m_sampleSize, 3,
-                    { m_lowerBound, m_upperBound, m_lowerBound, m_upperBound, m_lowerBound,
-                        m_upperBound });
+            /*           m_kinEnergy(r, s) = -0.5
+                           * mc_integrator(fn, m_sampleSize, 3,
+                               { m_lowerBound, m_upperBound, m_lowerBound, m_upperBound,
+               m_lowerBound, m_upperBound });
+           */
+            Eigen::VectorXd mid(3);
+            mid(0) = 0.5 * (m_nuclei[0].first.x + m_nuclei[1].first.x);
+            mid(1) = 0.5 * (m_nuclei[0].first.y + m_nuclei[1].first.y);
+            mid(2) = 0.5 * (m_nuclei[0].first.z + m_nuclei[1].first.z);
+
+            Eigen::VectorXd var(3);
+            var(0) = 2;
+            var(1) = 1;
+            var(2) = 1;
+
+            m_kinEnergy(r, s) = -0.5 * mc_normal_int(fn, m_sampleSize, 3, var, mid);
         }
-    std::cout << m_kinEnergy << std::endl << std::endl;
+    std::cout << "E_kin =\n" << m_kinEnergy << std::endl << std::endl;
 }
 
 void scf::HartreeFockSolver::calcPotential()
@@ -114,7 +76,7 @@ void scf::HartreeFockSolver::calcPotential()
         for (unsigned int r = 0; r < m_basisFunctions.size(); r++)
             for (unsigned int s = 0; s < m_basisFunctions.size(); s++) {
 
-                auto f = [=](const std::vector<double>& values) -> double {
+                auto fn = [=](const std::vector<double>& values) -> double {
                     double xSquare
                         = (values[0] - m_nuclei[i].first.x) * (values[0] - m_nuclei[i].first.x);
                     double ySquare
@@ -127,12 +89,25 @@ void scf::HartreeFockSolver::calcPotential()
                         * m_basisFunctions[s]({ values[0], values[1], values[2] }) / distance;
                 };
 
-                m_potEnergies[i](r, s) = mc_integrator(f, m_sampleSize, 3,
+                Eigen::VectorXd mid(3);
+                mid(0) = 0.5 * (m_nuclei[0].first.x + m_nuclei[1].first.x);
+                mid(1) = 0.5 * (m_nuclei[0].first.y + m_nuclei[1].first.y);
+                mid(2) = 0.5 * (m_nuclei[0].first.z + m_nuclei[1].first.z);
+
+                Eigen::VectorXd var(3);
+                var(0) = 2;
+                var(1) = 1;
+                var(2) = 1;
+
+                m_potEnergies[i](r, s) = mc_normal_int(fn, m_sampleSize, 3, var, mid);
+                /*m_potEnergies[i](r, s) = mc_integrator(f, m_sampleSize, 3,
                     { m_lowerBound, m_upperBound, m_lowerBound, m_upperBound, m_lowerBound,
-                        m_upperBound });
+                        m_upperBound });*/
             }
+    std::cout << "Potentials:\n";
     for (const auto& potential : m_potEnergies)
-        std::cout << potential << std::endl << std::endl;
+        std::cout << potential << std::endl;
+    std::cout << std::endl;
 }
 
 void scf::HartreeFockSolver::calcRepulsionIntegrals()
@@ -143,7 +118,7 @@ void scf::HartreeFockSolver::calcRepulsionIntegrals()
         for (unsigned int s = 0; s < m_size; s++)
             for (unsigned int t = 0; t < m_size; t++)
                 for (unsigned int u = 0; u < m_size; u++) {
-                    auto f = [=](const std::vector<double>& values) -> double {
+                    auto fn = [=](const std::vector<double>& values) -> double {
                         double xSquare = (values[0] - values[3]) * (values[0] - values[3]);
                         double ySquare = (values[1] - values[4]) * (values[1] - values[4]);
                         double zSquare = (values[2] - values[5]) * (values[2] - values[5]);
@@ -154,10 +129,28 @@ void scf::HartreeFockSolver::calcRepulsionIntegrals()
                             * m_basisFunctions[u]({ values[3], values[4], values[5] }) / distance;
                     };
 
-                    m_repulsionIntegrals[r][s][t][u] = mc_integrator(f, m_sampleSize, 6,
+                    Eigen::VectorXd mid(6);
+                    mid(0) = 0.5 * (m_nuclei[0].first.x + m_nuclei[1].first.x);
+                    mid(1) = 0.5 * (m_nuclei[0].first.y + m_nuclei[1].first.y);
+                    mid(2) = 0.5 * (m_nuclei[0].first.z + m_nuclei[1].first.z);
+                    mid(3) = 0.5 * (m_nuclei[0].first.x + m_nuclei[1].first.x);
+                    mid(4) = 0.5 * (m_nuclei[0].first.y + m_nuclei[1].first.y);
+                    mid(5) = 0.5 * (m_nuclei[0].first.z + m_nuclei[1].first.z);
+
+                    Eigen::VectorXd var(6);
+                    var(0) = 1;
+                    var(1) = 0.5;
+                    var(2) = 0.5;
+                    var(3) = 1;
+                    var(4) = 0.5;
+                    var(5) = 0.5;
+
+                    m_repulsionIntegrals[r][s][t][u] = mc_normal_int(fn, m_sampleSize, 6, var, mid);
+
+                    /*m_repulsionIntegrals[r][s][t][u] = mc_integrator(fn, m_sampleSize, 6,
                         { m_lowerBound, m_upperBound, m_lowerBound, m_upperBound, m_lowerBound,
                             m_upperBound, m_lowerBound, m_upperBound, m_lowerBound, m_upperBound,
-                            m_lowerBound, m_upperBound });
+                            m_lowerBound, m_upperBound });*/
                 }
 
     for (unsigned int r = 0; r < m_size; r++)
@@ -170,13 +163,111 @@ void scf::HartreeFockSolver::calcRepulsionIntegrals()
     std::cout << std::endl;
 }
 
+void scf::HartreeFockSolver::calcElectronRepulsion()
+{
+#pragma omp parallel for collapse(2)
+    for (unsigned int r = 0; r < m_size; r++)
+        for (unsigned int s = 0; s < m_size; s++) {
+
+            double sum = 0.0;
+
+            for (unsigned int t = 0; t < m_electrons; t++)
+                for (unsigned int u = 0; u < m_electrons; u++)
+                    sum += m_density(t, u)
+                        * (m_repulsionIntegrals[r][s][t][u]
+                            - 0.5 * m_repulsionIntegrals[r][u][t][s]);
+
+            m_electronRepulsion(r, s) = sum;
+        }
+
+    std::cout << "G = \n" << m_electronRepulsion << std::endl << std::endl;
+}
+
+void scf::HartreeFockSolver::guessInitialDensity()
+{
+
+    // TODO: Do a real approximiation.
+    m_density(0, 0) = 0.1240;
+    m_density(1, 0) = 0.4318;
+    m_density(0, 1) = 0.4318;
+    m_density(1, 1) = 1.5034;
+}
+
+void scf::HartreeFockSolver::calcOverlap()
+{
+
+#pragma omp parallel for collapse(2)
+    for (unsigned int i = 0; i < m_size; i++)
+        for (unsigned int j = 0; j < m_size; j++) {
+            auto f = [=](const std::vector<double>& values) -> double {
+                vec3 pos = { values[0], values[1], values[2] };
+                return m_basisFunctions[i](pos) * m_basisFunctions[j](pos);
+            };
+            m_overlap(i, j) = mc_integrator(f, m_sampleSize, 3,
+                { m_lowerBound, m_upperBound, m_lowerBound, m_upperBound, m_lowerBound,
+                    m_upperBound });
+        }
+}
+
 double scf::HartreeFockSolver::solveSCF()
 {
+    guessInitialDensity();
+    calcOverlap();
+
     calcKineticEnergy();
 
     calcPotential();
 
     calcRepulsionIntegrals();
 
+    Eigen::MatrixXd Hcore = m_kinEnergy;
+    for (const auto& potential : m_potEnergies)
+        Hcore -= potential; // Potential stabilisiert: Negativer Beitrag!
+
+    // Diagonalize S
+    Eigen::MatrixXd S = m_overlap;
+
+    Eigen::EigenSolver<Eigen::MatrixXd> solver(S);
+    Eigen::MatrixXd D = solver.eigenvalues().real().asDiagonal();
+    Eigen::MatrixXd P = solver.eigenvectors().real();
+
+    for (unsigned int i = 0; i < m_size; i++)
+        D(i, i) = 1.0 / std::sqrt(D(i, i));
+
+    Eigen::MatrixXd S_inv = P * D * P.inverse();
+
+    std::cout << "S = \n" << m_overlap << std::endl << std::endl;
+    std::cout << "S_inv = \n" << S_inv << std::endl << std::endl;
+
+    for (unsigned int i = 0; i < 10; i++) {
+
+        std::cout << "=============================\n ITERATION : " << i
+                  << "\n=============================\n";
+
+        calcElectronRepulsion();
+
+        Eigen::MatrixXd F = m_electronRepulsion + Hcore;
+
+        std::cout << "F = \n" << F << std::endl << std::endl;
+
+        F = S_inv * F * S_inv;
+
+        std::cout << "F' = \n" << F << std::endl << std::endl;
+
+        solver.compute(F);
+
+        std::cout << "Energy levels: \n" << solver.eigenvalues() << std::endl << std::endl;
+
+        Eigen::MatrixXd C_new = S_inv * Eigen::MatrixXd(solver.eigenvectors().real());
+
+        std::cout << "C_new = \n" << C_new << std::endl << std::endl;
+
+        // Update density matrix.
+        for (unsigned int i = 0; i < 2; i++)
+            for (unsigned int j = 0; j < 2; j++)
+                m_density(i, j) = 2.0 * C_new(i, 1) * C_new(j, 1);
+
+        std::cout << "New P=\n" << m_density << std::endl << std::endl;
+    }
     return -1;
 }

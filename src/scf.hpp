@@ -52,7 +52,7 @@ private:
      */
     const unsigned int m_occupied;
 
-    const unsigned long m_sampleSize = 1000000000;
+    const unsigned long m_sampleSize = 100000000;
 
     /**
      * @brief Contains condensed coefficients of each basisfunction, which make up the whole

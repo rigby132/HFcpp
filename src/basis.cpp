@@ -19,3 +19,5 @@ double basis::gtoGradient(const std::array<double, 3> coord, const std::array<do
     double zterm = 2 * alpha * z * z - 4 * z0 * alpha * z + 2 * z0 * z0 * alpha;
     return 2 * alpha * c * (xterm + yterm + zterm - 3) * std::exp(-alpha * distance_square);
 }
+
+

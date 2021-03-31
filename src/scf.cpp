@@ -18,7 +18,6 @@ hf::HFSolver::HFSolver(const std::vector<BasisFunction<3>>& basisFunctions,
     , m_nuclei(nuclei)
     , m_numElectrons(numElectrons)
     , m_occupied(numElectrons / 2)
-    , m_density(guessInitialDensity())
 {
     // Must obviously match.
     assert(basisFunctions.size() == basisGradients.size());
@@ -33,14 +32,22 @@ hf::HFSolver::HFSolver(const std::vector<BasisFunction<3>>& basisFunctions,
     assert(m_basisSize >= numElectrons / 2);
 }
 
-hf::Matrix hf::HFSolver::guessInitialDensity()
+hf::Matrix hf::HFSolver::guessInitialDensity(const Matrix& hcore)
+{
+
+    Eigen::SelfAdjointEigenSolver<Matrix> solver(hcore, Eigen::ComputeEigenvectors);
+
+    return calcDensity(solver.eigenvectors());
+}
+
+hf::Matrix hf::HFSolver::calcDensity(const Matrix& coeff)
 {
     Matrix density(m_basisSize, m_basisSize);
-    // TODO: Do real approximation
-    density(0, 0) = 0.1240;
-    density(1, 0) = 0.4318;
-    density(0, 1) = 0.4318;
-    density(1, 1) = 1.5034;
+    density.setZero();
+    for (unsigned int t = 0; t < m_basisSize; t++)
+        for (unsigned int u = 0; u < m_basisSize; u++)
+            for (unsigned int i = 0; i < m_occupied; i++)
+                density(t, u) += 2.0 * coeff(t, i) * coeff(u, i);
 
     return density;
 }
@@ -191,18 +198,27 @@ double hf::HFSolver::solve(double tolerance)
 
     std::cout << "kinEnergy = \n" << kinEnergy << '\n';
 
-    std::vector<Matrix> potentials(m_basisSize);
+    std::vector<Matrix> potentials(m_nuclei.size());
     for (unsigned int i = 0; i < potentials.size(); i++)
         potentials[i] = calcPotential(i);
 
     for (const auto& p : potentials)
         std::cout << "p = \n" << p << '\n';
 
-    auto repulsionIntegrals = calcRepulsionIntegrals();
-
     Matrix hcore = kinEnergy;
     for (const auto& potential : potentials)
         hcore -= potential;
+
+    std::cout << "HCORE = \n" << hcore << '\n';
+
+
+    auto repulsionIntegrals = calcRepulsionIntegrals();
+
+    //Matrix density = guessInitialDensity(hcore);
+    Matrix density(m_basisSize, m_basisSize);
+    density.setZero(); // Hcore initial guess.
+
+    std::cout << "Initial density:\n" << density << '\n';
 
     // Diagonalize overlap
     Eigen::SelfAdjointEigenSolver<Matrix> solver(overlap, Eigen::ComputeEigenvectors);
@@ -222,7 +238,7 @@ double hf::HFSolver::solve(double tolerance)
         std::cout << "ITERATION: " << i << '\n';
         i++;
 
-        auto repulsions = calcElectronRepulsion(repulsionIntegrals, m_density);
+        auto repulsions = calcElectronRepulsion(repulsionIntegrals, density);
 
         Matrix fockOperator = repulsions + hcore;
 
@@ -234,36 +250,34 @@ double hf::HFSolver::solve(double tolerance)
 
         Matrix coeff = overlap_inv * solver.eigenvectors();
 
-        std::cout << "Coeff =\n" << coeff(0, 1) << '\n';
-
         // Update density matrix.
-        auto prevDensity = m_density;
-        m_density.setZero();
-        for (unsigned int t = 0; t < m_basisSize; t++)
-            for (unsigned int u = 0; u < m_basisSize; u++)
-                for (unsigned int i = 0; i < m_occupied; i++)
-                    m_density(t, u) += 2.0 * coeff(t, i) * coeff(u, i);
+        auto prevDensity = density;
+        density = 0.7*calcDensity(coeff) + 0.3*prevDensity;
+        maxDelta = (prevDensity - density).cwiseAbs().maxCoeff();
 
-        maxDelta = (prevDensity - m_density).cwiseAbs().maxCoeff();
-
-        std::cout << "density = \n" << m_density << '\n';
+        std::cout << "density = \n" << density << '\n';
         std::cout << "Max delta density = " << maxDelta << '\n' << "\n\n";
-    } while (maxDelta > tolerance);
+    } while (maxDelta > tolerance and i < 500);
+
+    if(i >= 500)
+        std::cout << "CALCULATION DID NOT CONVERGE!\n";
 
     double HFEnergy = 0;
     for (unsigned int i = 0; i < m_occupied; i++)
         HFEnergy += solver.eigenvalues()(i);
 
+    std::cout << "E-Levels:\n" << solver.eigenvalues() << '\n';
+
     for (unsigned int r = 0; r < m_basisSize; r++)
         for (unsigned int s = 0; s < m_basisSize; s++)
-            HFEnergy += 0.5 * m_density(r, s) * hcore(r, s);
+            HFEnergy += 0.5 * density(r, s) * hcore(r, s);
 
     std::cout << "HF-Energy = " << HFEnergy << '\n';
 
     // Internuclear repulsion energy
     double IREnergy = 0;
     for (unsigned int i = 0; i < m_nuclei.size(); i++)
-        for (unsigned int j = i+1; j < m_nuclei.size(); j++){
+        for (unsigned int j = i + 1; j < m_nuclei.size(); j++) {
             const auto& nuc0 = m_nuclei[i];
             const auto& nuc1 = m_nuclei[j];
 

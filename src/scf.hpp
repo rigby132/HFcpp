@@ -48,19 +48,20 @@ private:
     const unsigned int m_numElectrons;
     /**
      * @brief Number of occupied orbitals starting from the lowest energy one.
-     * 
+     *
      */
     const unsigned int m_occupied;
 
-    const unsigned long m_sampleSize = 100000000;
+    const unsigned long m_sampleSize = 10000000;
 
     /**
-     * @brief Contains condensed coefficients of each basisfunction, which make up the whole
-     * wavefunction.
+     * @brief Guesses the initial density for the SCF procedure.
+     *
+     * @param hcore The core hamiltonian(without e-e interactions).
+     * @return A density matrix which contains all relevant coefficients in conedensed form.
      */
-    Matrix m_density;
-
-    Matrix guessInitialDensity();
+    Matrix guessInitialDensity(const Matrix& hcore);
+    Matrix calcDensity(const Matrix& coeff);
 
     Matrix calcOverlap();
     Matrix calcKineticEnergy();

@@ -9,7 +9,7 @@ set(CMAKE_CXX_STANDARD 17)
 # Get dependencies
 find_package (Eigen3 3.3 REQUIRED NO_MODULE)
 include(FindOpenMP)
-add_definitions(-DOMP_NUM_THREADS=4)
+add_definitions(-DOMP_NUM_THREADS=8)
 
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/arch)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
@@ -17,7 +17,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 
 # compiler flags
-set(GCC_COVERAGE_COMPILE_FLAGS "-Wall -Werror -pedantic -lpthread -Ofast")
+set(GCC_COVERAGE_COMPILE_FLAGS "-Wall -Werror -pedantic -lpthread -O3 -D_GLIBCXX_DEBUG")
 set(GCC_COVERAGE_LINK_FLAGS    "")
 
 set(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} ${GCC_COVERAGE_COMPILE_FLAGS} ${OpenMP_CXX_FLAGS}")

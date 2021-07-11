@@ -11,6 +11,8 @@
 
 #pragma once
 
+#include "basis.hpp"
+
 #include <Eigen/Dense>
 
 #include <Eigen/src/Core/Matrix.h>
@@ -22,23 +24,61 @@
 
 namespace hf {
 
-template <size_t N, typename T = double> using BasisFunction = std::function<T(std::array<T, N>)>;
-/**
- * @brief Information of the Nucleus: Position[0-2] and charge[3]
- *
- * @tparam T Type of number.
- */
-template <typename T = double> struct Nucleus {
-    T x, y, z;
-    T charge;
-};
 using Matrix = Eigen::MatrixXd;
 using Repulsions = std::vector<std::vector<std::vector<std::vector<double>>>>;
 
 class HFSolver {
 private:
-    const std::vector<BasisFunction<3>> m_basisFunctions;
-    const std::vector<BasisFunction<3>> m_basisGradients;
+    Matrix calcDensity(const Matrix& coeff);
+
+    std::vector<CGTO<double>> normalizeBasis(const std::vector<CGTO<double>>& basis);
+
+    Matrix calcOverlap();
+    Matrix calcOverlapOLD();
+    Matrix calcKineticEnergy();
+    Matrix calcKineticEnergyOLD();
+    Matrix calcPotential(size_t nucleus);
+    Matrix calcPotentialOLD(size_t nucleus);
+
+    Repulsions calcRepulsionIntegrals();
+    Repulsions calcRepulsionIntegralsOLD();
+    Matrix calcElectronRepulsion(const Repulsions& integrals, const Matrix& density);
+
+public:
+    /**
+     * @brief Construct a new HFSolver object
+     *
+     * @param basis The basis functions to use.
+     * @param nuclei The nuclei positions and charges.
+     * @param numElectrons Number of electrons contained in the structure.
+     */
+    HFSolver(const std::vector<CGTO<double>>& basis, const std::vector<Nucleus<>>& nuclei,
+        const unsigned int numElectrons);
+
+    /**
+     * @brief Does the complete Hartree-Fock calculation on the provided structure.
+     *
+     * @param tolerance The maximum absolute difference between iterations before the value is
+     * considered converged.
+     *
+     * @return double The ground-state Energy of the provided atomic structure.
+     */
+    double solve(double tolerance);
+
+    /**
+     * @brief Evaluates the a single orbital wavefunction.
+     *
+     * @param x x coordinate.
+     * @param y y coordinate.
+     * @param z z coordinate.
+     * @param level The index of the orbital in order of the calculated energy levels.
+     * @return The value at the specified point of the orbial.
+     */
+    double orbital(double x, double y, double z, unsigned int level) const;
+
+public:
+    const std::vector<CGTO<double>> m_basis;
+
     /**
      * @brief Number of basis functions used.
      */
@@ -52,45 +92,10 @@ private:
      */
     const unsigned int m_occupied;
 
-    const unsigned long m_sampleSize = 10000000;
+private:
+    Matrix m_coeff;
 
-    /**
-     * @brief Guesses the initial density for the SCF procedure.
-     *
-     * @param hcore The core hamiltonian(without e-e interactions).
-     * @return A density matrix which contains all relevant coefficients in conedensed form.
-     */
-    Matrix guessInitialDensity(const Matrix& hcore);
-    Matrix calcDensity(const Matrix& coeff);
-
-    Matrix calcOverlap();
-    Matrix calcKineticEnergy();
-    Matrix calcPotential(size_t nucleus);
-
-    Repulsions calcRepulsionIntegrals();
-    Matrix calcElectronRepulsion(const Repulsions& integrals, const Matrix& density);
-
-public:
-    /**
-     * @brief Construct a new HFSolver object
-     *
-     * @param basisFunctions The basis functions to use.
-     * @param basisGradients The corresponding gradients for each basis function.
-     * @param nuclei The nuclei positions and charges.
-     * @param numElectrons Number of electrons contained in the structure.
-     */
-    HFSolver(const std::vector<BasisFunction<3>>& basisFunctions,
-        const std::vector<BasisFunction<3>>& basisGradients, const std::vector<Nucleus<>>& nuclei,
-        const unsigned int numElectrons);
-
-    /**
-     * @brief Does the complete Hartree-Fock calculation on the provided structure.
-     *
-     * @param tolerance The maximum numeric difference between iterations before the value is
-     * considered converged.
-     *
-     * @return double The ground-state Energy of the provided atomic structure.
-     */
-    double solve(double tolerance);
+    const unsigned long m_sampleSize = 100000000;
+    const unsigned long m_integralSampleSize = 100000000;
 };
 }

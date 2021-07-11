@@ -1,26 +1,33 @@
 #include "scf.hpp"
+#include "basis.hpp"
+#include "boys.hpp"
 #include "integration.hpp"
 
 #include <Eigen/src/Core/util/Constants.h>
 #include <Eigen/src/Eigenvalues/SelfAdjointEigenSolver.h>
+#include <algorithm>
 #include <cassert>
+#include <cmath>
 #include <cstddef>
 
 // TODO REMOVE!
+#include <cstdio>
+#include <iomanip>
 #include <iostream>
+#include <limits>
 
-hf::HFSolver::HFSolver(const std::vector<BasisFunction<3>>& basisFunctions,
-    const std::vector<BasisFunction<3>>& basisGradients, const std::vector<Nucleus<>>& nuclei,
+constexpr double PI = 3.141592653589793;
+
+hf::HFSolver::HFSolver(const std::vector<CGTO<double>>& basis, const std::vector<Nucleus<>>& nuclei,
     const unsigned int numElectrons)
-    : m_basisFunctions(basisFunctions)
-    , m_basisGradients(basisGradients)
-    , m_basisSize(m_basisFunctions.size())
+    : m_basis(normalizeBasis(basis))
+    , m_basisSize(m_basis.size())
     , m_nuclei(nuclei)
     , m_numElectrons(numElectrons)
     , m_occupied(numElectrons / 2)
+    , m_coeff(m_basisSize, m_basisSize)
 {
-    // Must obviously match.
-    assert(basisFunctions.size() == basisGradients.size());
+    m_coeff.setZero();
 
     // TODO: replace the following 2 asserts with exceptions or reverse definition of electrons with
     // occupied(no exceptions possible)?
@@ -30,14 +37,6 @@ hf::HFSolver::HFSolver(const std::vector<BasisFunction<3>>& basisFunctions,
     // If less orbitals than electron-pairs are calculated, then the final energy cannot account for
     // the extra electrons => The final single point energy will be wrong.
     assert(m_basisSize >= numElectrons / 2);
-}
-
-hf::Matrix hf::HFSolver::guessInitialDensity(const Matrix& hcore)
-{
-
-    Eigen::SelfAdjointEigenSolver<Matrix> solver(hcore, Eigen::ComputeEigenvectors);
-
-    return calcDensity(solver.eigenvectors());
 }
 
 hf::Matrix hf::HFSolver::calcDensity(const Matrix& coeff)
@@ -52,74 +51,501 @@ hf::Matrix hf::HFSolver::calcDensity(const Matrix& coeff)
     return density;
 }
 
+template <typename FLOAT = double>
+FLOAT calcSingleOverlap(
+    const FLOAT a, const FLOAT b, const FLOAT a_x, FLOAT b_x, const int qa, const int qb)
+{
+    assert(qa >= 0);
+    assert(qb >= 0);
+
+    // Some useful constants
+    const FLOAT p = a + b;
+    const FLOAT mu = a * b / p;
+    // const FLOAT p_x = (a * a_x + b * b_x) / p;
+    const FLOAT x_ab = a_x - b_x;
+    const FLOAT k_ab = std::exp(-mu * x_ab * x_ab);
+    const FLOAT x_pa = -b * x_ab / p;
+    const FLOAT x_pb = a * x_ab / p;
+
+    // Overlap integrals (over product of 2 GTOs) for all quantum numbers up to S_ij.
+    auto nan = std::numeric_limits<FLOAT>::quiet_NaN();
+
+    std::vector<std::vector<FLOAT>> S(qa + 2, std::vector<FLOAT>(qb + 2, nan));
+    S[0][0] = std::sqrt(PI / p) * k_ab;
+    S[1][0] = x_pa * S[0][0];
+    S[0][1] = x_pb * S[0][0];
+    S[1][1] = x_pa * S[0][1] + 0.5 * S[0][0] / p;
+
+    if (qa >= qb) {
+        // Fill S with values for all i  and j = 0 and 1.
+        for (int i = 2; i <= qa; i++) {
+            S[i][0] = x_pa * S[i - 1][0] + (0.5 / p) * (i - 1) * S[i - 2][0];
+            S[i][1] = x_pa * S[i - 1][1] + (0.5 / p) * ((i - 1) * S[i - 2][1] + S[i - 1][0]);
+        }
+
+        // Move up to reach j = qb by recursion.
+        for (int j = 2; j <= qb; j++)
+            for (int i = qa - qb + j; i <= qa; i++)
+                S[i][j]
+                    = x_pb * S[i][j - 1] + (i * S[i - 1][j - 1] + (j - 1) * S[i][j - 2]) / (2 * p);
+    } else {
+        // Fill S with values for all j  and i = 0 and 1.
+        for (int j = 2; j <= qa; j++) {
+            S[0][j] = x_pb * S[0][j - 1] + (0.5 / p) * (j - 1) * S[0][j - 2];
+            S[1][j] = x_pb * S[1][j - 1] + (0.5 / p) * ((j - 1) * S[1][j - 2] + S[0][j - 1]);
+        }
+
+        // Move up to reach i = qa by recursion.
+        for (int i = 2; i <= qa; i++)
+            for (int j = qb - qa + i; j <= qb; j++)
+                S[i][j]
+                    = x_pa * S[i - 1][j] + ((i - 1) * S[i - 2][j] + j * S[i - 1][j - 1]) / (2 * p);
+    }
+
+    return S[qa][qb];
+}
+
 hf::Matrix hf::HFSolver::calcOverlap()
 {
     Matrix overlap(m_basisSize, m_basisSize);
 
-#pragma omp parallel for collapse(2)
-    for (unsigned int i = 0; i < m_basisSize; i++)
-        for (unsigned int j = 0; j < m_basisSize; j++) {
-            auto fn = [=](const std::array<double, 3>& pos) -> double {
-                return m_basisFunctions[i](pos) * m_basisFunctions[j](pos);
-            };
+    for (unsigned int r = 0; r < m_basisSize; r++)
+        for (unsigned int s = 0; s < m_basisSize; s++) {
+            const auto& cg0 = m_basis[r];
+            const auto& cg1 = m_basis[s];
 
-            // TODO: Basisfunctions should encode their own position -> maybe basisfunctions as
-            // generic functors?
-            NormalDistribution<3> dist({ 0, 0, 0 }, { 2, 2, 2 });
+            double sum = 0.0;
+            // Calc overlap between cgto0 and cgto1
+            for (const auto& g0 : cg0.gtos_)
+                for (const auto& g1 : cg1.gtos_)
+                    sum += g0.c_ * g1.c_
+                        * calcSingleOverlap(g0.a_, g1.a_, cg0.cx_, cg1.cx_, g0.i_, g1.i_)
+                        * calcSingleOverlap(g0.a_, g1.a_, cg0.cy_, cg1.cy_, g0.j_, g1.j_)
+                        * calcSingleOverlap(g0.a_, g1.a_, cg0.cz_, cg1.cz_, g0.k_, g1.k_);
 
-            overlap(i, j) = mc_integrate(fn, dist, m_sampleSize);
+            overlap(r, s) = sum;
         }
 
     return overlap;
 }
 
+hf::Matrix hf::HFSolver::calcOverlapOLD()
+{
+    Matrix overlap(m_basisSize, m_basisSize);
+
+#pragma omp parallel for
+    for (unsigned int i = 0; i < m_basisSize; i++)
+        for (unsigned int j = 0; j < m_basisSize; j++) {
+            auto fn = [=](double x, double y, double z) -> double {
+                return m_basis[i](x, y, z) * m_basis[j](x, y, z);
+            };
+
+            auto mean = estimateMean(m_basis[i], m_basis[j]);
+            auto dev = estimateDev(m_basis[i], m_basis[j]);
+
+            overlap(i, j) = mc_integrate3(fn, mean, dev, m_sampleSize);
+        }
+
+    return overlap;
+}
+
+std::vector<hf::CGTO<double>> hf::HFSolver::normalizeBasis(const std::vector<CGTO<double>>& basis)
+{
+    std::vector<CGTO<double>> normalizedBasis;
+
+    for (unsigned int i = 0; i < basis.size(); i++) {
+        const CGTO<double>& cg = basis[i];
+
+        double sum = 0.0;
+        // Calc overlap between cgto0 and cgto1
+        for (const auto& g0 : cg.gtos_)
+            for (const auto& g1 : cg.gtos_)
+                sum += g0.c_ * g1.c_ * calcSingleOverlap(g0.a_, g1.a_, cg.cx_, cg.cx_, g0.i_, g1.i_)
+                    * calcSingleOverlap(g0.a_, g1.a_, cg.cy_, cg.cy_, g0.j_, g1.j_)
+                    * calcSingleOverlap(g0.a_, g1.a_, cg.cz_, cg.cz_, g0.k_, g1.k_);
+
+        normalizedBasis.push_back(basis[i].normalize(std::sqrt(sum)));
+    }
+
+    return normalizedBasis;
+}
+
+/**
+ * @brief Calculates a single kin-energy integral for the specified primitive GTOs.
+ *
+ * @tparam FLOAT The floating point type to use.
+ * @param a The exponent of GTO a.
+ * @param b The exponent of GTO b.
+ * @param a_x The center coordinate of GTO a.
+ * @param b_x The center coordinate of GTO b.
+ * @param qa The orbital anulgar momentum quantum number of GTO a.
+ * @param qb The orbital anulgar momentum quantum number of GTO b.
+ *
+ * @return The Integral of GTOa * GTOb over -inf & +inf.
+ */
+template <typename FLOAT = double>
+FLOAT calcSingleKinEnergy(
+    const FLOAT a, const FLOAT b, const FLOAT a_x, FLOAT b_x, const int qa, const int qb)
+{
+    assert(qa >= 0);
+    assert(qb >= 0);
+
+    // Some useful constants
+    const FLOAT p = a + b;
+    const FLOAT mu = a * b / p;
+    const FLOAT p_x = (a * a_x + b * b_x) / p;
+    const FLOAT x_ab = a_x - b_x;
+    const FLOAT k_ab = std::exp(-mu * x_ab * x_ab);
+    const FLOAT x_pb = p_x - b_x;
+    const FLOAT x_pa = p_x - a_x;
+
+    // Overlap integrals (over product of 2 GTOs) for all quantum numbers up to S_i+2,j+2.
+    auto nan = std::numeric_limits<FLOAT>::quiet_NaN();
+    std::vector<std::vector<FLOAT>> S(qa + 1 + 2, std::vector<FLOAT>(qb + 1 + 2, nan));
+
+    S[0][0] = std::sqrt(PI / p) * k_ab;
+    S[1][0] = x_pa * S[0][0];
+    S[0][1] = x_pb * S[0][0];
+    S[1][1] = x_pa * S[0][1] + 0.5 * S[0][0] / p;
+
+    // Fill the matrix with starting values for the general recursion.
+    // S for i = 0 or j = 0
+    for (int i = 2; i <= qa + 2; i++)
+        S[i][0] = x_pa * S[i - 1][0] + (0.5 / p) * (i - 1) * S[i - 2][0];
+
+    for (int j = 2; j <= qb + 2; j++)
+        S[0][j] = x_pb * S[0][j - 1] + (0.5 / p) * (j - 1) * S[0][j - 2];
+
+    // S for i = 1 or j = 1
+    for (int j = 2; j <= qb + 2; j++)
+        S[1][j] = x_pa * S[0][j] + (0.5 / p) * j * S[0][j - 1];
+
+    for (int i = 2; i <= qa + 2; i++)
+        S[i][1] = x_pb * S[i][0] + (0.5 / p) * i * S[i - 1][0];
+
+    // S for i >= 2 or j >= 2
+    for (int i = 2; i <= qa + 2; i++)
+        for (int j = 2; j <= qb + 2; j++)
+            S[i][j] = x_pa * S[i - 1][j] + ((i - 1) * S[i - 2][j] + j * S[i - 1][j - 1]) / (2 * p);
+
+    FLOAT D = 4 * a * a * S[qa + 2][qb] - 2 * a * (2 * qa + 1) * S[qa][qb];
+    if (qa > 1)
+        D += qa * (qa - 1) * S[qa - 2][qb];
+
+    return D;
+}
+
 hf::Matrix hf::HFSolver::calcKineticEnergy()
+{
+    Matrix kinEnergy(m_basisSize, m_basisSize);
+
+    for (unsigned int r = 0; r < m_basisSize; r++)
+        for (unsigned int s = 0; s < m_basisSize; s++) {
+            const auto& cg0 = m_basis[r];
+            const auto& cg1 = m_basis[s];
+
+            double sum = 0;
+            // Calc overlap between cgto0 and cgto1
+            for (const auto& g0 : cg0.gtos_)
+                for (const auto& g1 : cg1.gtos_) {
+                    sum += -0.5 * g0.c_ * g1.c_
+                        * calcSingleKinEnergy(g0.a_, g1.a_, cg0.cx_, cg1.cx_, g0.i_, g1.i_)
+                        * calcSingleOverlap(g0.a_, g1.a_, cg0.cy_, cg1.cy_, g0.j_, g1.j_)
+                        * calcSingleOverlap(g0.a_, g1.a_, cg0.cz_, cg1.cz_, g0.k_, g1.k_);
+
+                    sum += -0.5 * g0.c_ * g1.c_
+                        * calcSingleOverlap(g0.a_, g1.a_, cg0.cx_, cg1.cx_, g0.i_, g1.i_)
+                        * calcSingleKinEnergy(g0.a_, g1.a_, cg0.cy_, cg1.cy_, g0.j_, g1.j_)
+                        * calcSingleOverlap(g0.a_, g1.a_, cg0.cz_, cg1.cz_, g0.k_, g1.k_);
+
+                    sum += -0.5 * g0.c_ * g1.c_
+                        * calcSingleOverlap(g0.a_, g1.a_, cg0.cx_, cg1.cx_, g0.i_, g1.i_)
+                        * calcSingleOverlap(g0.a_, g1.a_, cg0.cy_, cg1.cy_, g0.j_, g1.j_)
+                        * calcSingleKinEnergy(g0.a_, g1.a_, cg0.cz_, cg1.cz_, g0.k_, g1.k_);
+                }
+            kinEnergy(r, s) = sum;
+        }
+
+    return kinEnergy;
+}
+
+hf::Matrix hf::HFSolver::calcKineticEnergyOLD()
 {
     hf::Matrix kinEnergy(m_basisSize, m_basisSize);
 #pragma omp parallel for collapse(2)
-    for (unsigned int r = 0; r < m_basisFunctions.size(); r++)
-        for (unsigned int s = 0; s < m_basisFunctions.size(); s++) {
+    for (unsigned int r = 0; r < m_basis.size(); r++)
+        for (unsigned int s = 0; s < m_basis.size(); s++) {
 
-            auto fn = [=](const std::array<double, 3>& pos) -> double {
-                return m_basisFunctions[r](pos) * m_basisGradients[s](pos);
+            auto fn = [=](double x, double y, double z) -> double {
+                return m_basis[r](x, y, z) * m_basis[s].laplace(x, y, z);
             };
 
-            std::array<double, 3> mean { 0.5 * (m_nuclei[0].x + m_nuclei[1].x),
-                0.5 * (m_nuclei[0].y + m_nuclei[1].y), 0.5 * (m_nuclei[0].z + m_nuclei[1].z) };
+            auto mean = estimateMean(m_basis[r], m_basis[s]);
+            auto dev = estimateDev(m_basis[r], m_basis[s]);
 
-            // TODO: Orient deviation on nucleus-nucleus axis.
-            NormalDistribution<3> dist(mean, { 2, 1, 1 });
-
-            kinEnergy(r, s) = -0.5 * mc_integrate(fn, dist, m_sampleSize);
+            kinEnergy(r, s) = -0.5 * mc_integrate3(fn, mean, dev, m_sampleSize);
         }
     return kinEnergy;
+}
+
+template <typename FLOAT = double>
+std::vector<FLOAT> calcPotentialIntegral(const std::vector<FLOAT>& start, const int qa,
+    const int qb, const FLOAT x_pa, const FLOAT x_pz, const FLOAT x_ab, const FLOAT p)
+{
+    const int N = static_cast<int>(start.size()) - 1;
+    const int qn = qa + qb; // Calculate up to i+1
+
+    assert(N >= 0);
+    assert(qn >= 0);
+    assert(N >= qn);
+
+    auto nan = std::numeric_limits<FLOAT>::quiet_NaN();
+
+    // Do vertical recursion for i.
+    std::vector<std::vector<FLOAT>> theta(qn + 1);
+    theta[0] = start; // Fills theta[0][n] for all n.
+
+    for (int i = 1; i <= qn; i++) {
+        theta[i] = std::vector<FLOAT>(N - i + 1, nan);
+
+        for (int n = N - i; n >= 0; n--) {
+            theta[i][n] = x_pa * theta[i - 1][n] - x_pz * theta[i - 1][n + 1];
+
+            if (i - 1 > 0)
+                theta[i][n] += 0.5 * (i - 1) * (theta[i - 2][n] - theta[i - 2][n + 1]) / p;
+        }
+    }
+
+    // Do horizontal recursion for j.
+    std::vector<std::vector<std::vector<FLOAT>>> kappa(qb + 1);
+
+    // Remove stuff smaller than index i.
+    if (qa > 0)
+        theta.erase(theta.begin(), theta.begin() + qa);
+
+    // Update max order N
+    const FLOAT N2 = N - qa;
+
+    // Init for j = 0
+    kappa[0] = theta;
+
+    for (int j = 1; j <= qb; j++) {
+        kappa[j] = std::vector<std::vector<FLOAT>>(qb - j + 1);
+
+        for (int i = 0; i <= qb - j; i++) {
+            kappa[j][i] = std::vector<FLOAT>(N2 - j + 1);
+
+            for (int n = 0; n <= N2 - j; n++)
+                kappa[j][i][n] = kappa[j - 1][i + 1][n] + x_ab * kappa[j - 1][i][n];
+        }
+    }
+
+    // Returns potential with quantum number j == qb and i == qa (shifted left by qa)
+    return kappa[qb][0];
 }
 
 hf::Matrix hf::HFSolver::calcPotential(size_t i)
 {
     hf::Matrix potential(m_basisSize, m_basisSize);
-#pragma omp parallel for collapse(2)
-    for (unsigned int r = 0; r < m_basisFunctions.size(); r++)
-        for (unsigned int s = 0; s < m_basisFunctions.size(); s++) {
+    const auto& nuc = m_nuclei.at(i);
 
-            auto fn = [=](const std::array<double, 3>& values) -> double {
-                double xSquare = (values[0] - m_nuclei[i].x) * (values[0] - m_nuclei[i].x);
-                double ySquare = (values[1] - m_nuclei[i].y) * (values[1] - m_nuclei[i].y);
-                double zSquare = (values[2] - m_nuclei[i].z) * (values[2] - m_nuclei[i].z);
-                double distance = std::sqrt(xSquare + ySquare + zSquare);
-                return m_basisFunctions[r](values) * m_nuclei[i].charge
-                    * m_basisFunctions[s](values) / distance;
-            };
+    for (unsigned int r = 0; r < m_basisSize; r++)
+        for (unsigned int s = 0; s < m_basisSize; s++) {
 
-            std::array<double, 3> mean { 0.5 * (m_nuclei[0].x + m_nuclei[1].x),
-                0.5 * (m_nuclei[0].y + m_nuclei[1].y), 0.5 * (m_nuclei[0].z + m_nuclei[1].z) };
+            const CGTO<double>& cg0 = m_basis[r];
+            const CGTO<double>& cg1 = m_basis[s];
 
-            // TODO: Orient deviation on nucleus-nucleus axis.
-            NormalDistribution<3> dist(mean, { 2, 1, 1 });
+            const double x_ab = cg0.cx_ - cg1.cx_;
+            const double y_ab = cg0.cy_ - cg1.cy_;
+            const double z_ab = cg0.cz_ - cg1.cz_;
 
-            potential(r, s) = mc_integrate(fn, dist, m_sampleSize);
+            double sum = 0;
+            for (const GTO<double>& g0 : cg0.gtos_)
+                for (const GTO<double>& g1 : cg1.gtos_) {
+
+                    const double a = g0.a_;
+                    const double b = g1.a_;
+                    const double p = a + b;
+                    const double px = (a * cg0.cx_ + b * cg1.cx_) / p;
+                    const double py = (a * cg0.cy_ + b * cg1.cy_) / p;
+                    const double pz = (a * cg0.cz_ + b * cg1.cz_) / p;
+                    const double mu = a * b / (a + b);
+                    const double k_ab = std::exp(-mu * (x_ab * x_ab + y_ab * y_ab + z_ab * z_ab));
+
+                    const double sep2 = (px - nuc.x) * (px - nuc.x) + (py - nuc.y) * (py - nuc.y)
+                        + (pz - nuc.z) * (pz - nuc.z);
+
+                    const int N = g0.i_ + g0.j_ + g0.k_ + g1.i_ + g1.j_ + g1.k_;
+
+                    double nan = std::numeric_limits<double>::quiet_NaN();
+
+                    std::vector<double> potential(N + 1, nan);
+                    for (int n = 0; n <= N; n++)
+                        potential[n] = (2 * PI / p) * k_ab * boys(n, p * sep2);
+
+                    potential = calcPotentialIntegral(
+                        potential, g0.i_, g1.i_, px - cg0.cx_, px - nuc.x, x_ab, p);
+                    potential = calcPotentialIntegral(
+                        potential, g0.j_, g1.j_, py - cg0.cy_, py - nuc.y, y_ab, p);
+                    potential = calcPotentialIntegral(
+                        potential, g0.k_, g1.k_, pz - cg0.cz_, pz - nuc.z, z_ab, p);
+
+                    sum += g0.c_ * g1.c_ * nuc.charge * potential[0];
+                }
+
+            potential(r, s) = sum;
         }
     return potential;
+}
+
+hf::Matrix hf::HFSolver::calcPotentialOLD(size_t i)
+{
+    hf::Matrix potential(m_basisSize, m_basisSize);
+#pragma omp parallel for
+    for (unsigned int r = 0; r < m_basis.size(); r++)
+        for (unsigned int s = 0; s < m_basisSize; s++) {
+
+            auto fn = [=](double x, double y, double z) -> double {
+                double xSquare = (x - m_nuclei[i].x) * (x - m_nuclei[i].x);
+                double ySquare = (y - m_nuclei[i].y) * (y - m_nuclei[i].y);
+                double zSquare = (z - m_nuclei[i].z) * (z - m_nuclei[i].z);
+                double distance = std::sqrt(xSquare + ySquare + zSquare);
+
+                return m_basis[r](x, y, z) * m_nuclei[i].charge * m_basis[s](x, y, z) / distance;
+            };
+
+            auto mean = estimateMean(m_basis[r], m_basis[s]);
+            auto dev = estimateDev(m_basis[r], m_basis[s]);
+
+            // TODO: Orient deviation on nucleus-nucleus axis.
+            potential(r, s) = mc_integrate3(fn, mean, dev, m_sampleSize);
+        }
+    return potential;
+}
+
+/**
+ * @brief Calculates the 2 electron repulsion integral of 4 primitive GTOs.
+ *
+ * @tparam FLOAT The floating point type to use.
+ * @param start The Initial starting values for this dimension(eg. x|y|z).
+ * @param quantum An array containing the 4 quantum numbers i,j,k,l (one for each orbital).
+ * @param expo An array containing the 4 exponents of each orbital function.
+ * @param cx An array containing the center coordinates of each orbital.
+ * @return The 2 electron repulsion integral.
+ */
+template <typename FLOAT = double>
+std::vector<FLOAT> calcSingleRepulsionIntegral(const std::vector<FLOAT>& start,
+    const int (&quantum)[4], const FLOAT (&expo)[4], const FLOAT (&cx)[4])
+{
+    // TODO Add FLOAT assert checks everywhere.
+
+    // The highest order to reach in each recursion.
+    const int N = start.size() - 1;
+    assert(N >= 0);
+
+    // The quantum numbers to reach.
+    const int qi = quantum[0];
+    const int qj = quantum[1];
+    const int qk = quantum[2];
+    const int ql = quantum[3];
+
+    // Define constants used in the recursions.
+    const FLOAT p = expo[0] + expo[1];
+    const FLOAT px = (expo[0] * cx[0] + expo[1] * cx[1]) / p;
+    const FLOAT q = expo[2] + expo[3];
+    const FLOAT qx = (expo[2] * cx[2] + expo[3] * cx[3]) / q;
+    const FLOAT x_ab = cx[0] - cx[1];
+    const FLOAT x_cd = cx[2] - cx[3];
+    const FLOAT x_pa = px - cx[0];
+    const FLOAT x_pq = px - qx;
+    const FLOAT a = p * q / (p + q);
+
+    const FLOAT nan = std::numeric_limits<FLOAT>::quiet_NaN();
+
+    // First recursion: Get first index up to u+j+k+l(the sum of all quantum numbers) .
+    std::vector<std::vector<FLOAT>> theta(qi + qj + qk + ql + 1);
+    theta[0] = start;
+
+    // The first recursion must go up to i = sum(quantum)
+    // so enough values are available for the other recursions.
+    for (int i = 1; i <= qi + qj + qk + ql; i++) {
+        theta[i] = std::vector<FLOAT>(N - i + 1, nan);
+        for (int n = 0; n <= N - i; n++) {
+            theta[i][n] = x_pa * theta[i - 1][n] - a * x_pq * theta[i - 1][n + 1] / p;
+
+            if (i - 2 >= 0)
+                theta[i][n] += (i - 1) * (theta[i - 2][n] - a * theta[i - 2][n + 1] / p) / (2 * p);
+        }
+    }
+
+    // Second recursion:
+    std::vector<std::vector<std::vector<FLOAT>>> omega(qk + ql + 1);
+    omega[0] = theta;
+
+    for (int k = 1; k <= qk + ql; k++) {
+        omega[k] = std::vector<std::vector<FLOAT>>(qi + qj + qk + ql - k + 1);
+
+        for (int i = 0; i <= qi + qj + qk + ql - k; i++) {
+            omega[k][i] = std::vector<FLOAT>(N - qi - qj - qk - ql + 1);
+
+            for (int n = 0; n <= N - qi - qj - qk - ql; n++) {
+                const FLOAT factor = -(expo[1] * x_ab + expo[3] * x_cd) / q;
+                FLOAT val = factor * omega[k - 1][i][n] - p * omega[k - 1][i + 1][n] / q;
+
+                if (i > 0)
+                    val += i * omega[k - 1][i - 1][n] / (2 * q);
+
+                if (k > 1)
+                    val += (k - 1) * omega[k - 2][i][n] / (2 * q);
+
+                omega[k][i][n] = val;
+            }
+        }
+    }
+
+    // Third recursion:
+    std::vector<std::vector<std::vector<std::vector<FLOAT>>>> tau(qj + 1);
+    tau[0] = omega;
+
+    for (int j = 1; j <= qj; j++) {
+        tau[j] = std::vector<std::vector<std::vector<FLOAT>>>(qk + ql + 1);
+
+        for (int k = 0; k <= qk + ql; k++) {
+            tau[j][k] = std::vector<std::vector<FLOAT>>(qi + qj - j + 1);
+
+            for (int i = 0; i <= qi + qj - j; i++) {
+                tau[j][k][i] = std::vector<FLOAT>(N - qi - qj - qk - ql + 1);
+
+                for (int n = 0; n <= N - qi - qj - qk - ql; n++)
+                    tau[j][k][i][n] = tau[j - 1][k][i + 1][n] + x_ab * tau[j - 1][k][i][n];
+            }
+        }
+    }
+
+    // Fourth recursion:
+    // Use smaller table because i & j do not need to change anymore.
+    std::vector<std::vector<std::vector<FLOAT>>> chi(ql + 1);
+    chi[0] = std::vector<std::vector<FLOAT>>(qk + ql + 1);
+
+    for (int k = 0; k <= qk + ql; k++) {
+        chi[0][k] = std::vector<FLOAT>(N - qi - qj - qk - ql + 1, nan);
+        for (int n = 0; n <= N - qi - qj - qk - ql; n++) {
+            chi[0][k][n] = tau[qj][k][qi][n];
+        }
+    }
+
+    for (int l = 1; l <= ql; l++) {
+        chi[l] = std::vector<std::vector<FLOAT>>(qk + ql - l + 1);
+
+        for (int k = 0; k <= qk + ql - l; k++) {
+            chi[l][k] = std::vector<FLOAT>(N - qi - qj - qk - ql + 1, nan);
+
+            for (int n = 0; n <= N - qi - qj - qk - ql; n++)
+                chi[l][k][n] = chi[l - 1][k + 1][n] + x_cd * chi[l - 1][k][n];
+        }
+    }
+
+    return chi[ql][qk];
 }
 
 hf::Repulsions hf::HFSolver::calcRepulsionIntegrals()
@@ -135,36 +561,166 @@ hf::Repulsions hf::HFSolver::calcRepulsionIntegrals()
         }
     }
 
-#pragma omp parallel for collapse(4)
+    double nan = std::numeric_limits<double>::quiet_NaN();
+
     for (unsigned int r = 0; r < m_basisSize; r++)
         for (unsigned int s = 0; s < m_basisSize; s++)
             for (unsigned int t = 0; t < m_basisSize; t++)
                 for (unsigned int u = 0; u < m_basisSize; u++) {
-                    auto fn = [=](const std::array<double, 6>& values) -> double {
-                        double xSquare = (values[0] - values[3]) * (values[0] - values[3]);
-                        double ySquare = (values[1] - values[4]) * (values[1] - values[4]);
-                        double zSquare = (values[2] - values[5]) * (values[2] - values[5]);
-                        double distance = std::sqrt(xSquare + ySquare + zSquare);
-                        return m_basisFunctions[r]({ values[0], values[1], values[2] })
-                            * m_basisFunctions[s]({ values[0], values[1], values[2] })
-                            * m_basisFunctions[t]({ values[3], values[4], values[5] })
-                            * m_basisFunctions[u]({ values[3], values[4], values[5] }) / distance;
+                    const auto& cg0 = m_basis[r];
+                    const auto& cg1 = m_basis[s];
+                    const auto& cg2 = m_basis[t];
+                    const auto& cg3 = m_basis[u];
+
+                    double sum = 0;
+
+                    for (const auto& g0 : cg0.gtos_)
+                        for (const auto& g1 : cg1.gtos_)
+                            for (const auto& g2 : cg2.gtos_)
+                                for (const auto& g3 : cg3.gtos_) {
+                                    int qsum = g0.i_ + g1.i_ + g2.i_ + g3.i_;
+                                    qsum += g0.j_ + g1.j_ + g2.j_ + g3.j_;
+                                    qsum += g0.k_ + g1.k_ + g2.k_ + g3.k_;
+
+                                    std::vector<double> integral(qsum + 1, nan);
+
+                                    double p = g0.a_ + g1.a_;
+                                    double q = g2.a_ + g3.a_;
+                                    double mu_ab = g0.a_ * g1.a_ / p;
+                                    double mu_cd = g2.a_ * g3.a_ / q;
+
+                                    double dist2_ab = (cg0.cx_ - cg1.cx_) * (cg0.cx_ - cg1.cx_)
+                                        + (cg0.cy_ - cg1.cy_) * (cg0.cy_ - cg1.cy_)
+                                        + (cg0.cz_ - cg1.cz_) * (cg0.cz_ - cg1.cz_);
+
+                                    double dist2_cd = (cg2.cx_ - cg3.cx_) * (cg2.cx_ - cg3.cx_)
+                                        + (cg2.cy_ - cg3.cy_) * (cg2.cy_ - cg3.cy_)
+                                        + (cg2.cz_ - cg3.cz_) * (cg2.cz_ - cg3.cz_);
+
+                                    double k_ab = std::exp(-mu_ab * dist2_ab);
+                                    double k_cd = std::exp(-mu_cd * dist2_cd);
+
+                                    double f
+                                        = 2 * std::pow(PI, 5.0 / 2.0) / (p * q * std::sqrt(p + q));
+
+                                    const double px = (g0.a_ * cg0.cx_ + g1.a_ * cg1.cx_) / p;
+                                    const double py = (g0.a_ * cg0.cy_ + g1.a_ * cg1.cy_) / p;
+                                    const double pz = (g0.a_ * cg0.cz_ + g1.a_ * cg1.cz_) / p;
+                                    const double qx = (g2.a_ * cg2.cx_ + g3.a_ * cg3.cx_) / q;
+                                    const double qy = (g2.a_ * cg2.cy_ + g3.a_ * cg3.cy_) / q;
+                                    const double qz = (g2.a_ * cg2.cz_ + g3.a_ * cg3.cz_) / q;
+
+                                    const double dist2_pq = (px - qx) * (px - qx)
+                                        + (py - qy) * (py - qy) + (pz - qz) * (pz - qz);
+
+                                    for (int n = 0; n <= qsum; n++)
+                                        integral[n]
+                                            = f * k_ab * k_cd * boys(n, p * q * dist2_pq / (p + q));
+
+                                    integral = calcSingleRepulsionIntegral(integral,
+                                        { g0.i_, g1.i_, g2.i_, g3.i_ },
+                                        { g0.a_, g1.a_, g2.a_, g3.a_ },
+                                        { cg0.cx_, cg1.cx_, cg2.cx_, cg3.cx_ });
+
+                                    integral = calcSingleRepulsionIntegral(integral,
+                                        { g0.j_, g1.j_, g2.j_, g3.j_ },
+                                        { g0.a_, g1.a_, g2.a_, g3.a_ },
+                                        { cg0.cy_, cg1.cy_, cg2.cy_, cg3.cy_ });
+
+                                    integral = calcSingleRepulsionIntegral(integral,
+                                        { g0.k_, g1.k_, g2.k_, g3.k_ },
+                                        { g0.a_, g1.a_, g2.a_, g3.a_ },
+                                        { cg0.cz_, cg1.cz_, cg2.cz_, cg3.cz_ });
+
+                                    sum += g0.c_ * g1.c_ * g2.c_ * g3.c_ * integral[0];
+                                }
+
+                    integrals[r][s][t][u] = sum;
+
+                    //==============
+
+                    /*auto fn = [=](const double x0, const double y0, const double z0,
+                                  const double x1, const double y1, const double z1) -> double {
+                        double dist2
+                            = (x0 - x1) * (x0 - x1) + (y0 - y1) * (y0 - y1) + (z0 - z1) * (z0 - z1);
+
+                        return m_basis[r](x0, y0, z0) * m_basis[s](x0, y0, z0)
+                            * m_basis[t](x1, y1, z1) * m_basis[u](x1, y1, z1) / std::sqrt(dist2);
                     };
 
-                    std::array<double, 6> mean { 0.5 * (m_nuclei[0].x + m_nuclei[1].x),
-                        0.5 * (m_nuclei[0].y + m_nuclei[1].y),
-                        0.5 * (m_nuclei[0].z + m_nuclei[1].z),
-                        0.5 * (m_nuclei[0].x + m_nuclei[1].x),
-                        0.5 * (m_nuclei[0].y + m_nuclei[1].y),
-                        0.5 * (m_nuclei[0].z + m_nuclei[1].z) };
+                    std::array<double, 6> mean;
+                    auto m0 = estimateMean(m_basis[r], m_basis[s]);
+                    auto m1 = estimateMean(m_basis[t], m_basis[u]);
 
-                    NormalDistribution<6> dist(mean, { 2, 1, 1, 2, 1, 1 });
+                    auto end = std::copy(m0.begin(), m0.end(), mean.begin());
+                    std::copy(m1.begin(), m1.end(), end);
 
-                    integrals[r][s][t][u] = mc_integrate<6>(fn, dist, m_sampleSize);
-#pragma omp critical
-                    std::cout << '(' << r << ' ' << s << '|' << t << ' ' << u
-                              << ") = " << integrals[r][s][t][u] << '\n';
+                    std::array<double, 6> dev;
+                    auto dev0 = estimateDev(m_basis[r], m_basis[s]);
+                    auto dev1 = estimateDev(m_basis[t], m_basis[u]);
+
+                    end = std::copy(dev0.begin(), dev0.end(), dev.begin());
+                    std::copy(dev1.begin(), dev1.end(), end);
+
+                    double integral = mc_integrate6(fn, mean, dev, m_integralSampleSize);
+                    //==============
+                    std::cout << '(' << r << ' ' << s << '|' << t << ' ' << u << ")' = " << integral
+                              << '\n';*/
+
+                    // std::cout << '(' << r << ' ' << s << '|' << t << ' ' << u << ") = " << sum
+                    //        << '\n';
                 }
+
+    return integrals;
+}
+
+hf::Repulsions hf::HFSolver::calcRepulsionIntegralsOLD()
+{
+    Repulsions integrals(m_basisSize);
+
+    for (auto& lvl1 : integrals) {
+        lvl1.resize(m_basisSize);
+        for (auto& lvl2 : lvl1) {
+            lvl2.resize(m_basisSize);
+            for (auto& lvl3 : lvl2)
+                lvl3.resize(m_basisSize);
+        }
+    }
+
+    for (unsigned int r = 0; r < m_basisSize; r++)
+        for (unsigned int s = 0; s < m_basisSize; s++)
+            for (unsigned int t = 0; t < m_basisSize; t++)
+                for (unsigned int u = 0; u < m_basisSize; u++) {
+                    auto fn = [=](const double x0, const double y0, const double z0,
+                                  const double x1, const double y1, const double z1) -> double {
+                        double dist2
+                            = (x0 - x1) * (x0 - x1) + (y0 - y1) * (y0 - y1) + (z0 - z1) * (z0 - z1);
+
+                        return m_basis[r](x0, y0, z0) * m_basis[s](x0, y0, z0)
+                            * m_basis[t](x1, y1, z1) * m_basis[u](x1, y1, z1) / std::sqrt(dist2);
+                    };
+
+                    std::array<double, 6> mean;
+                    auto m0 = estimateMean(m_basis[r], m_basis[s]);
+                    auto m1 = estimateMean(m_basis[t], m_basis[u]);
+
+                    auto end = std::copy(m0.begin(), m0.end(), mean.begin());
+                    std::copy(m1.begin(), m1.end(), end);
+
+                    std::array<double, 6> dev;
+                    auto dev0 = estimateDev(m_basis[r], m_basis[s]);
+                    auto dev1 = estimateDev(m_basis[t], m_basis[u]);
+
+                    end = std::copy(dev0.begin(), dev0.end(), dev.begin());
+                    std::copy(dev1.begin(), dev1.end(), end);
+
+                    double integral = mc_integrate6(fn, mean, dev, m_integralSampleSize);
+                    integrals[r][s][t][u] = integral;
+
+                    std::cout << '(' << r << ' ' << s << '|' << t << ' ' << u << ") = " << integral
+                              << '\n';
+                }
+
     return integrals;
 }
 
@@ -183,6 +739,7 @@ hf::Matrix hf::HFSolver::calcElectronRepulsion(
                     sum += density(t, u) * (integrals[r][s][t][u] - 0.5 * integrals[r][u][t][s]);
 
             repulsion(r, s) = sum;
+            assert(!std::isnan(sum));
         }
 
     return repulsion;
@@ -193,17 +750,20 @@ double hf::HFSolver::solve(double tolerance)
     auto overlap = calcOverlap();
 
     std::cout << "Overlap = \n" << overlap << '\n';
+    // std::cout << "OverlapOLD = \n" << calcOverlapOLD() << '\n';
 
     auto kinEnergy = calcKineticEnergy();
-
     std::cout << "kinEnergy = \n" << kinEnergy << '\n';
+    // std::cout << "kinEnergyOLD = \n" << calcKineticEnergyOLD() << '\n';
 
     std::vector<Matrix> potentials(m_nuclei.size());
     for (unsigned int i = 0; i < potentials.size(); i++)
         potentials[i] = calcPotential(i);
 
-    for (const auto& p : potentials)
-        std::cout << "p = \n" << p << '\n';
+    for (unsigned int i = 0; i < potentials.size(); i++)
+        std::cout << "p = \n" << potentials[i] << '\n';
+    //<< "pOLD = \n"
+    //<< calcPotentialOLD(i) << '\n';
 
     Matrix hcore = kinEnergy;
     for (const auto& potential : potentials)
@@ -211,10 +771,7 @@ double hf::HFSolver::solve(double tolerance)
 
     std::cout << "HCORE = \n" << hcore << '\n';
 
-
-    auto repulsionIntegrals = calcRepulsionIntegrals();
-
-    //Matrix density = guessInitialDensity(hcore);
+    // Matrix density = guessInitialDensity(hcore);
     Matrix density(m_basisSize, m_basisSize);
     density.setZero(); // Hcore initial guess.
 
@@ -225,10 +782,21 @@ double hf::HFSolver::solve(double tolerance)
     Matrix D = solver.eigenvalues().asDiagonal();
     Matrix P = solver.eigenvectors();
 
+    std::cout << "D = \n" << D << '\n';
+    std::cout << "P = \n" << P << '\n';
+    std::cout << "Pinv = \n" << P.inverse() << '\n';
+
     for (unsigned int i = 0; i < m_basisSize; i++)
-        D(i, i) = 1.0 / std::sqrt(D(i, i));
+        D(i, i) = 1.0 / std::sqrt(std::abs(D(i, i)));
+
+    std::cout << "D = \n" << D << '\n';
 
     Matrix overlap_inv = P * D * P.inverse();
+
+    std::cout << "overlap_inv = \n" << overlap_inv << '\n';
+
+    std::cout << "Repulsion integrals:\n";
+    auto repulsionIntegrals = calcRepulsionIntegrals();
 
     std::cout << "STARTING SCF\n\n";
 
@@ -248,18 +816,18 @@ double hf::HFSolver::solve(double tolerance)
 
         solver.compute(fockOperator);
 
-        Matrix coeff = overlap_inv * solver.eigenvectors();
+        m_coeff = overlap_inv * solver.eigenvectors();
 
         // Update density matrix.
         auto prevDensity = density;
-        density = 0.7*calcDensity(coeff) + 0.3*prevDensity;
+        density = 0.8 * calcDensity(m_coeff) + 0.2 * prevDensity;
         maxDelta = (prevDensity - density).cwiseAbs().maxCoeff();
 
         std::cout << "density = \n" << density << '\n';
         std::cout << "Max delta density = " << maxDelta << '\n' << "\n\n";
-    } while (maxDelta > tolerance and i < 500);
+    } while (maxDelta > tolerance and i < 70);
 
-    if(i >= 500)
+    if (i >= 70)
         std::cout << "CALCULATION DID NOT CONVERGE!\n";
 
     double HFEnergy = 0;
@@ -274,20 +842,31 @@ double hf::HFSolver::solve(double tolerance)
 
     std::cout << "HF-Energy = " << HFEnergy << '\n';
 
-    // Internuclear repulsion energy
-    double IREnergy = 0;
+    // Inter-nuclear repulsion energy
+    double INREnergy = 0;
     for (unsigned int i = 0; i < m_nuclei.size(); i++)
         for (unsigned int j = i + 1; j < m_nuclei.size(); j++) {
             const auto& nuc0 = m_nuclei[i];
             const auto& nuc1 = m_nuclei[j];
 
-            IREnergy += nuc0.charge * nuc1.charge
+            INREnergy += nuc0.charge * nuc1.charge
                 / std::sqrt((nuc0.x - nuc1.x) * (nuc0.x - nuc1.x)
                     + (nuc0.y - nuc1.y) * (nuc0.y - nuc1.y)
                     + (nuc0.z - nuc1.z) * (nuc0.z - nuc1.z));
         }
-    std::cout << "IR-Energy = " << IREnergy << '\n';
-    std::cout << "Total energy = " << HFEnergy + IREnergy << '\n';
+    std::cout << "INR-Energy = " << INREnergy << '\n';
+    std::cout << "Total energy = " << HFEnergy + INREnergy << '\n';
 
-    return HFEnergy + IREnergy;
+    return HFEnergy + INREnergy;
+}
+
+double hf::HFSolver::orbital(double x, double y, double z, unsigned int n) const
+{
+    assert(n <= m_basisSize);
+
+    double sum = 0;
+    for (unsigned int i = 0; i < m_basisSize; i++)
+        sum += m_coeff(i, n) * m_basis[i](x, y, z);
+
+    return sum;
 }

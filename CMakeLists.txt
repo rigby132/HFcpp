@@ -17,11 +17,35 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 
 # compiler flags
-set(GCC_COVERAGE_COMPILE_FLAGS "-Wall -Werror -pedantic -lpthread -O3 -D_GLIBCXX_DEBUG")
-set(GCC_COVERAGE_LINK_FLAGS    "")
+if("${CMAKE_C_COMPILER_ID}" STREQUAL "GNU")
+    message("Detected GNU-Compiler.")
+    if("${CMAKE_BUILD_TYPE}" STREQUAL "Release")
+        set(COVERAGE_COMPILE_FLAGS "-Wall -Weffc++ -Wextra -Werror -pedantic -lpthread -Ofast")
+        set(COVERAGE_LINK_FLAGS    "")
+    elseif("${CMAKE_BUILD_TYPE}" STREQUAL "Debug")
+        set(COVERAGE_COMPILE_FLAGS "-Wall -Weffc++ -Wextra -Werror -pedantic -lpthread -g -O0 -D_GLIBCXX_DEBUG")
+        set(COVERAGE_LINK_FLAGS    "")
+    else()
+        set(COVERAGE_COMPILE_FLAGS "-Wall -Weffc++ -Wextra -Werror -pedantic -lpthread -Ofast")
+        set(COVERAGE_LINK_FLAGS    "")
+    endif()
 
-set(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} ${GCC_COVERAGE_COMPILE_FLAGS} ${OpenMP_CXX_FLAGS}")
-set(CMAKE_EXE_LINKER_FLAGS  "${CMAKE_EXE_LINKER_FLAGS} ${GCC_COVERAGE_LINK_FLAGS}")
+elseif("${CMAKE_C_COMPILER_ID}" STREQUAL "Clang")
+    message("Detected Clang-Compiler.")
+    if("${CMAKE_BUILD_TYPE}" STREQUAL "Release")
+        set(COVERAGE_COMPILE_FLAGS "-Wall -Wextra -Werror -pedantic -pthread -Ofast")
+        set(COVERAGE_LINK_FLAGS    "")
+    elseif("${CMAKE_BUILD_TYPE}" STREQUAL "Debug")
+        set(COVERAGE_COMPILE_FLAGS "-Wall -Wextra -Werror -pedantic -pthread -g -O0 -fsanitize=address")
+        set(COVERAGE_LINK_FLAGS    "")
+    else()
+        set(COVERAGE_COMPILE_FLAGS "-Wall -Wextra -Werror -pedantic -pthread -Ofast")
+        set(COVERAGE_LINK_FLAGS    "")
+    endif()
+endif()
+
+set(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} ${COVERAGE_COMPILE_FLAGS} ${OpenMP_CXX_FLAGS}")
+set(CMAKE_EXE_LINKER_FLAGS  "${CMAKE_EXE_LINKER_FLAGS} ${COVERAGE_LINK_FLAGS}")
 
 
 add_executable(hf)
@@ -29,7 +53,6 @@ target_sources(hf
     PRIVATE
     "${CMAKE_SOURCE_DIR}/src/main.cpp"
     "${CMAKE_SOURCE_DIR}/src/scf.cpp"
-    "${CMAKE_SOURCE_DIR}/src/basis.cpp"
     )
 
 target_link_libraries(hf Eigen3::Eigen)

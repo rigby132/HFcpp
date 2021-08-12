@@ -17,7 +17,6 @@
 #include <fstream>
 #include <iomanip>
 #include <ios>
-#include <iostream>
 #include <limits>
 #include <map>
 #include <stdexcept>
@@ -43,7 +42,6 @@ const std::map<std::string, unsigned int> ATOMIC_CHARGES
 template <typename FLOAT = double>
 std::vector<Nucleus<FLOAT>> readStructureFromFile(const std::string& path)
 {
-    std::cout << "READING .xyz data: " << path << '\n';
     std::ifstream fileStream(path);
 
     if (!fileStream.is_open())
@@ -55,8 +53,6 @@ std::vector<Nucleus<FLOAT>> readStructureFromFile(const std::string& path)
     if (size < 1)
         throw std::invalid_argument("Number of atoms must be at least 1.");
 
-    std::cout << "No atoms: " << size << '\n';
-
     std::vector<Nucleus<FLOAT>> structure(size);
     for (unsigned int i = 0; i < static_cast<unsigned int>(size); i++) {
         std::string atom;
@@ -64,7 +60,6 @@ std::vector<Nucleus<FLOAT>> readStructureFromFile(const std::string& path)
         FLOAT x, y, z;
         unsigned int charge;
         fileStream >> atom >> x >> y >> z;
-        std::cout << "Reading atom: " << atom << ' ' << x << ' ' << y << ' ' << z << '\n';
 
         try {
             charge = ATOMIC_CHARGES.at(atom);
@@ -92,7 +87,6 @@ template <typename FLOAT = double>
 std::vector<CGTO<FLOAT>> readBasisFromFile(
     const std::string& path, const std::vector<Nucleus<FLOAT>>& structure)
 {
-    std::cout << "READING basis data: " << path << '\n';
     std::ifstream fileStream(path);
 
     if (!fileStream.is_open())
@@ -113,7 +107,6 @@ std::vector<CGTO<FLOAT>> readBasisFromFile(
         if (fileStream.eof())
             break;
 
-        // std::cout << "Element: " << name << '\n';
         try {
             element = ATOMIC_CHARGES.at(name);
         } catch (const std::out_of_range& e) {
@@ -125,7 +118,6 @@ std::vector<CGTO<FLOAT>> readBasisFromFile(
         for (unsigned int i = 0; i < size; i++) {
             unsigned int index, momentum, pairs;
             fileStream >> index >> momentum >> pairs;
-            // std::cout << "Data: " << index << ' ' << momentum << ' ' << pairs << '\n';
 
             std::vector<FLOAT> coeffs;
             std::vector<FLOAT> expos;
@@ -133,7 +125,7 @@ std::vector<CGTO<FLOAT>> readBasisFromFile(
             for (unsigned int j = 0; j < pairs; j++) {
                 FLOAT coeff, expo;
                 fileStream >> expo >> coeff;
-                // std::cout << "c&e: " << coeff << ' ' << expo << '\n';
+
                 coeffs.push_back(coeff);
                 expos.push_back(expo);
             }
@@ -143,7 +135,6 @@ std::vector<CGTO<FLOAT>> readBasisFromFile(
 
     std::vector<CGTO<FLOAT>> basis;
     for (const auto& atom : structure) {
-        std::cout << "ATOM: " << atom.charge << '\n';
         std::vector<std::tuple<unsigned int, std::vector<FLOAT>, std::vector<FLOAT>>> atomBasis;
         try {
             atomBasis = basisSet.at(atom.charge);
@@ -154,14 +145,11 @@ std::vector<CGTO<FLOAT>> readBasisFromFile(
         for (const auto& functions : atomBasis) {
             const int momentum = std::get<0>(functions);
 
-            std::cout << "Momentum: " << momentum << '\n';
-
             // Add all permutations of the 3 shape parameters.
             for (int i = 0; i <= momentum; i++)
                 for (int j = 0; j <= momentum; j++)
                     for (int k = 0; k <= momentum; k++) {
                         if (i + j + k == momentum) {
-                            std::cout << "i j k: " << i << ' ' << j << ' ' << k << '\n';
                             basis.push_back(CGTO<FLOAT>(atom.x, atom.y, atom.z,
                                 std::get<1>(functions), std::get<2>(functions), i, j, k));
                         }
@@ -176,7 +164,6 @@ template <typename FLOAT = double>
 void writeOrbitals(
     const HFSolver& solver, const std::string& path, const FLOAT space, const unsigned int points)
 {
-    std::cout << "WRITING orbital data: " << path << '\n';
     std::ofstream fileStream(path);
 
     if (!fileStream.is_open())
@@ -240,82 +227,6 @@ void writeOrbitals(
                         spaceZ * z + minZ - space, i);
 
                     fileStream << ro * ro << ' ';
-                }
-        fileStream << '\n';
-    }
-}
-
-template <typename FLOAT = double>
-void writeOrbitalsContour(const HFSolver& solver, const std::string& path, const FLOAT space,
-    const unsigned int points, const FLOAT minValue)
-{
-    std::cout << "WRITING orbital data: " << path << '\n';
-    std::ofstream fileStream(path);
-
-    if (!fileStream.is_open())
-        throw std::invalid_argument("Could not open file");
-
-    fileStream << "# vtk DataFile Version 4.2\n"
-               << "orbital functions\n"
-               << "ASCII\n"
-               << "DATASET STRUCTURED_POINTS\n";
-
-    FLOAT minX = 0;
-    FLOAT minY = 0;
-    FLOAT minZ = 0;
-    FLOAT maxX = 0;
-    FLOAT maxY = 0;
-    FLOAT maxZ = 0;
-
-    // x coordinate.
-    for (const auto& nuc : solver.m_nuclei) {
-        if (nuc.x < minX)
-            minX = nuc.x;
-        if (nuc.x > maxX)
-            maxX = nuc.x;
-    }
-    // y coordinate.
-    for (const auto& nuc : solver.m_nuclei) {
-        if (nuc.y < minY)
-            minY = nuc.y;
-        if (nuc.y > maxY)
-            maxY = nuc.y;
-    }
-    // z coordinate.
-    for (const auto& nuc : solver.m_nuclei) {
-        if (nuc.z < minZ)
-            minZ = nuc.z;
-        if (nuc.z > maxZ)
-            maxZ = nuc.z;
-    }
-
-    // FLOAT points = 50;
-    FLOAT spaceX = (maxX - minX + space * 2) / static_cast<FLOAT>(points);
-    FLOAT spaceY = (maxY - minY + space * 2) / static_cast<FLOAT>(points);
-    FLOAT spaceZ = (maxZ - minZ + space * 2) / static_cast<FLOAT>(points);
-
-    fileStream << "DIMENSIONS " << points << ' ' << points << ' ' << points << '\n'
-               << "ORIGIN " << minX - space << ' ' << minY - space << ' ' << minZ - space << '\n'
-               << "SPACING " << spaceX << ' ' << spaceY << ' ' << spaceZ << '\n'
-               << "POINT_DATA " << static_cast<int>(points * points * points) << '\n';
-
-    // Add data set for each orbital.
-    for (unsigned int i = 0; i < solver.m_basisSize; i++) {
-        fileStream << "SCALARS ro" << std::setfill('0') << std::setw(3) << i << std::setw(0)
-                   << " float 1\n"
-                   << "LOOKUP_TABLE default\n";
-
-        // Fill in data.
-        for (unsigned int x = 0; x < points; x++)
-            for (unsigned int y = 0; y < points; y++)
-                for (unsigned int z = 0; z < points; z++) {
-                    FLOAT ro = solver.orbital(spaceX * x + minX - space, spaceY * y + minY - space,
-                        spaceZ * z + minZ - space, i);
-
-                    if (ro * ro >= minValue)
-                        fileStream << 1.0f << ' ';
-                    else
-                        fileStream << 0.0f << ' ';
                 }
         fileStream << '\n';
     }

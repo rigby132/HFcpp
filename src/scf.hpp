@@ -31,17 +31,11 @@ class HFSolver {
 private:
     Matrix calcDensity(const Matrix& coeff);
 
-    std::vector<CGTO<double>> normalizeBasis(const std::vector<CGTO<double>>& basis);
-
     Matrix calcOverlap();
-    Matrix calcOverlapOLD();
     Matrix calcKineticEnergy();
-    Matrix calcKineticEnergyOLD();
     Matrix calcPotential(size_t nucleus);
-    Matrix calcPotentialOLD(size_t nucleus);
 
     Repulsions calcRepulsionIntegrals();
-    Repulsions calcRepulsionIntegralsOLD();
     Matrix calcElectronRepulsion(const Repulsions& integrals, const Matrix& density);
 
 public:
@@ -50,10 +44,10 @@ public:
      *
      * @param basis The basis functions to use.
      * @param nuclei The nuclei positions and charges.
-     * @param numElectrons Number of electrons contained in the structure.
+     * @param occupied_orbitals Number of fully occupied orbitals, starting from lowest one.
      */
     HFSolver(const std::vector<CGTO<double>>& basis, const std::vector<Nucleus<>>& nuclei,
-        const unsigned int numElectrons);
+        const unsigned int occupied_orbitals);
 
     /**
      * @brief Does the complete Hartree-Fock calculation on the provided structure.
@@ -85,7 +79,6 @@ public:
     const unsigned int m_basisSize;
 
     const std::vector<Nucleus<>> m_nuclei;
-    const unsigned int m_numElectrons;
     /**
      * @brief Number of occupied orbitals starting from the lowest energy one.
      *
@@ -95,7 +88,5 @@ public:
 private:
     Matrix m_coeff;
 
-    const unsigned long m_sampleSize = 100000000;
-    const unsigned long m_integralSampleSize = 100000000;
 };
 }

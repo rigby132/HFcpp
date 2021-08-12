@@ -1,17 +1,7 @@
-/**
- * @file scf.cpp
- * @author Deniz Güven (s0394473@uni-frankfrut.de)
- * @brief Defines various functions for the scf method.
- * @version 0.1
- * @date 2021-07-11
- *
- * @copyright Copyright (c) 2021
- *
- */
-
 #include "scf.hpp"
 #include "basis.hpp"
 #include "boys.hpp"
+#include "integration.hpp"
 
 #include <Eigen/src/Core/util/Constants.h>
 #include <Eigen/src/Eigenvalues/SelfAdjointEigenSolver.h>
@@ -29,14 +19,24 @@
 constexpr double PI = 3.141592653589793;
 
 hf::HFSolver::HFSolver(const std::vector<CGTO<double>>& basis, const std::vector<Nucleus<>>& nuclei,
-    const unsigned int occupied_orbitals)
-    : m_basis(basis)
+    const unsigned int numElectrons)
+    : m_basis(normalizeBasis(basis))
     , m_basisSize(m_basis.size())
     , m_nuclei(nuclei)
-    , m_occupied(occupied_orbitals)
+    , m_numElectrons(numElectrons)
+    , m_occupied(numElectrons / 2)
     , m_coeff(m_basisSize, m_basisSize)
 {
     m_coeff.setZero();
+
+    // TODO: replace the following 2 asserts with exceptions or reverse definition of electrons with
+    // occupied(no exceptions possible)?
+    // Only closed shell structures are allowed!
+    assert(numElectrons % 2 == 0);
+
+    // If less orbitals than electron-pairs are calculated, then the final energy cannot account for
+    // the extra electrons => The final single point energy will be wrong.
+    assert(m_basisSize >= numElectrons / 2);
 }
 
 hf::Matrix hf::HFSolver::calcDensity(const Matrix& coeff)
@@ -127,6 +127,47 @@ hf::Matrix hf::HFSolver::calcOverlap()
         }
 
     return overlap;
+}
+
+hf::Matrix hf::HFSolver::calcOverlapOLD()
+{
+    Matrix overlap(m_basisSize, m_basisSize);
+
+#pragma omp parallel for
+    for (unsigned int i = 0; i < m_basisSize; i++)
+        for (unsigned int j = 0; j < m_basisSize; j++) {
+            auto fn = [=](double x, double y, double z) -> double {
+                return m_basis[i](x, y, z) * m_basis[j](x, y, z);
+            };
+
+            auto mean = estimateMean(m_basis[i], m_basis[j]);
+            auto dev = estimateDev(m_basis[i], m_basis[j]);
+
+            overlap(i, j) = mc_integrate3(fn, mean, dev, m_sampleSize);
+        }
+
+    return overlap;
+}
+
+std::vector<hf::CGTO<double>> hf::HFSolver::normalizeBasis(const std::vector<CGTO<double>>& basis)
+{
+    std::vector<CGTO<double>> normalizedBasis;
+
+    for (unsigned int i = 0; i < basis.size(); i++) {
+        const CGTO<double>& cg = basis[i];
+
+        double sum = 0.0;
+        // Calc overlap between cgto0 and cgto1
+        for (const auto& g0 : cg.gtos_)
+            for (const auto& g1 : cg.gtos_)
+                sum += g0.c_ * g1.c_ * calcSingleOverlap(g0.a_, g1.a_, cg.cx_, cg.cx_, g0.i_, g1.i_)
+                    * calcSingleOverlap(g0.a_, g1.a_, cg.cy_, cg.cy_, g0.j_, g1.j_)
+                    * calcSingleOverlap(g0.a_, g1.a_, cg.cz_, cg.cz_, g0.k_, g1.k_);
+
+        normalizedBasis.push_back(basis[i].normalize(std::sqrt(sum)));
+    }
+
+    return normalizedBasis;
 }
 
 /**
@@ -228,6 +269,25 @@ hf::Matrix hf::HFSolver::calcKineticEnergy()
     return kinEnergy;
 }
 
+hf::Matrix hf::HFSolver::calcKineticEnergyOLD()
+{
+    hf::Matrix kinEnergy(m_basisSize, m_basisSize);
+#pragma omp parallel for collapse(2)
+    for (unsigned int r = 0; r < m_basis.size(); r++)
+        for (unsigned int s = 0; s < m_basis.size(); s++) {
+
+            auto fn = [=](double x, double y, double z) -> double {
+                return m_basis[r](x, y, z) * m_basis[s].laplace(x, y, z);
+            };
+
+            auto mean = estimateMean(m_basis[r], m_basis[s]);
+            auto dev = estimateDev(m_basis[r], m_basis[s]);
+
+            kinEnergy(r, s) = -0.5 * mc_integrate3(fn, mean, dev, m_sampleSize);
+        }
+    return kinEnergy;
+}
+
 template <typename FLOAT = double>
 std::vector<FLOAT> calcPotentialIntegral(const std::vector<FLOAT>& start, const int qa,
     const int qb, const FLOAT x_pa, const FLOAT x_pz, const FLOAT x_ab, const FLOAT p)
@@ -241,37 +301,6 @@ std::vector<FLOAT> calcPotentialIntegral(const std::vector<FLOAT>& start, const 
 
     auto nan = std::numeric_limits<FLOAT>::quiet_NaN();
 
-    // Create single 3d array for all recursion elements
-    std::vector<std::vector<std::vector<FLOAT>>> theta(
-        qn + 1, std::vector<std::vector<FLOAT>>(qb + 1, std::vector<FLOAT>(N + 1, nan)));
-
-    // Set initial values.
-    theta[0][0] = start;
-
-    // Calculate all thetas[i][0][n] up to i=qn and n = N
-    for (int i = 1; i <= qn; i++) {
-        for (int n = N - i; n >= 0; n--) {
-            theta[i][0][n] = x_pa * theta[i - 1][0][n] - x_pz * theta[i - 1][0][n + 1];
-
-            if (i - 1 > 0)
-                theta[i][0][n] += 0.5 * (i - 1) * (theta[i - 2][0][n] - theta[i - 2][0][n + 1]) / p;
-        }
-    }
-
-    // Do horizontal recursion for j.
-    for (int j = 1; j <= qb; j++) {
-        for (int i = qa; i <= qn - j; i++) {
-            for (int n = 0; n <= N - qn; n++)
-                theta[i][j][n] = theta[i + 1][j - 1][n] + x_ab * theta[i][j - 1][n];
-        }
-    }
-
-    // Return only needed orders of theta(0 to N-qn)
-    std::vector<FLOAT> result(theta[qa][qb].begin(), theta[qa][qb].begin() + N - qn + 1);
-
-    return result;
-
-    /*========================================
     // Do vertical recursion for i.
     std::vector<std::vector<FLOAT>> theta(qn + 1);
     theta[0] = start; // Fills theta[0][n] for all n.
@@ -312,7 +341,7 @@ std::vector<FLOAT> calcPotentialIntegral(const std::vector<FLOAT>& start, const 
     }
 
     // Returns potential with quantum number j == qb and i == qa (shifted left by qa)
-    return kappa[qb][0];*/
+    return kappa[qb][0];
 }
 
 hf::Matrix hf::HFSolver::calcPotential(size_t i)
@@ -363,9 +392,33 @@ hf::Matrix hf::HFSolver::calcPotential(size_t i)
 
                     sum += g0.c_ * g1.c_ * nuc.charge * potential[0];
                 }
-            assert(!std::isnan(sum));
 
             potential(r, s) = sum;
+        }
+    return potential;
+}
+
+hf::Matrix hf::HFSolver::calcPotentialOLD(size_t i)
+{
+    hf::Matrix potential(m_basisSize, m_basisSize);
+#pragma omp parallel for
+    for (unsigned int r = 0; r < m_basis.size(); r++)
+        for (unsigned int s = 0; s < m_basisSize; s++) {
+
+            auto fn = [=](double x, double y, double z) -> double {
+                double xSquare = (x - m_nuclei[i].x) * (x - m_nuclei[i].x);
+                double ySquare = (y - m_nuclei[i].y) * (y - m_nuclei[i].y);
+                double zSquare = (z - m_nuclei[i].z) * (z - m_nuclei[i].z);
+                double distance = std::sqrt(xSquare + ySquare + zSquare);
+
+                return m_basis[r](x, y, z) * m_nuclei[i].charge * m_basis[s](x, y, z) / distance;
+            };
+
+            auto mean = estimateMean(m_basis[r], m_basis[s]);
+            auto dev = estimateDev(m_basis[r], m_basis[s]);
+
+            // TODO: Orient deviation on nucleus-nucleus axis.
+            potential(r, s) = mc_integrate3(fn, mean, dev, m_sampleSize);
         }
     return potential;
 }
@@ -582,8 +635,90 @@ hf::Repulsions hf::HFSolver::calcRepulsionIntegrals()
                                     sum += g0.c_ * g1.c_ * g2.c_ * g3.c_ * integral[0];
                                 }
 
-                    assert(!std::isnan(sum));
                     integrals[r][s][t][u] = sum;
+
+                    //==============
+
+                    /*auto fn = [=](const double x0, const double y0, const double z0,
+                                  const double x1, const double y1, const double z1) -> double {
+                        double dist2
+                            = (x0 - x1) * (x0 - x1) + (y0 - y1) * (y0 - y1) + (z0 - z1) * (z0 - z1);
+
+                        return m_basis[r](x0, y0, z0) * m_basis[s](x0, y0, z0)
+                            * m_basis[t](x1, y1, z1) * m_basis[u](x1, y1, z1) / std::sqrt(dist2);
+                    };
+
+                    std::array<double, 6> mean;
+                    auto m0 = estimateMean(m_basis[r], m_basis[s]);
+                    auto m1 = estimateMean(m_basis[t], m_basis[u]);
+
+                    auto end = std::copy(m0.begin(), m0.end(), mean.begin());
+                    std::copy(m1.begin(), m1.end(), end);
+
+                    std::array<double, 6> dev;
+                    auto dev0 = estimateDev(m_basis[r], m_basis[s]);
+                    auto dev1 = estimateDev(m_basis[t], m_basis[u]);
+
+                    end = std::copy(dev0.begin(), dev0.end(), dev.begin());
+                    std::copy(dev1.begin(), dev1.end(), end);
+
+                    double integral = mc_integrate6(fn, mean, dev, m_integralSampleSize);
+                    //==============
+                    std::cout << '(' << r << ' ' << s << '|' << t << ' ' << u << ")' = " << integral
+                              << '\n';*/
+
+                    // std::cout << '(' << r << ' ' << s << '|' << t << ' ' << u << ") = " << sum
+                    //        << '\n';
+                }
+
+    return integrals;
+}
+
+hf::Repulsions hf::HFSolver::calcRepulsionIntegralsOLD()
+{
+    Repulsions integrals(m_basisSize);
+
+    for (auto& lvl1 : integrals) {
+        lvl1.resize(m_basisSize);
+        for (auto& lvl2 : lvl1) {
+            lvl2.resize(m_basisSize);
+            for (auto& lvl3 : lvl2)
+                lvl3.resize(m_basisSize);
+        }
+    }
+
+    for (unsigned int r = 0; r < m_basisSize; r++)
+        for (unsigned int s = 0; s < m_basisSize; s++)
+            for (unsigned int t = 0; t < m_basisSize; t++)
+                for (unsigned int u = 0; u < m_basisSize; u++) {
+                    auto fn = [=](const double x0, const double y0, const double z0,
+                                  const double x1, const double y1, const double z1) -> double {
+                        double dist2
+                            = (x0 - x1) * (x0 - x1) + (y0 - y1) * (y0 - y1) + (z0 - z1) * (z0 - z1);
+
+                        return m_basis[r](x0, y0, z0) * m_basis[s](x0, y0, z0)
+                            * m_basis[t](x1, y1, z1) * m_basis[u](x1, y1, z1) / std::sqrt(dist2);
+                    };
+
+                    std::array<double, 6> mean;
+                    auto m0 = estimateMean(m_basis[r], m_basis[s]);
+                    auto m1 = estimateMean(m_basis[t], m_basis[u]);
+
+                    auto end = std::copy(m0.begin(), m0.end(), mean.begin());
+                    std::copy(m1.begin(), m1.end(), end);
+
+                    std::array<double, 6> dev;
+                    auto dev0 = estimateDev(m_basis[r], m_basis[s]);
+                    auto dev1 = estimateDev(m_basis[t], m_basis[u]);
+
+                    end = std::copy(dev0.begin(), dev0.end(), dev.begin());
+                    std::copy(dev1.begin(), dev1.end(), end);
+
+                    double integral = mc_integrate6(fn, mean, dev, m_integralSampleSize);
+                    integrals[r][s][t][u] = integral;
+
+                    std::cout << '(' << r << ' ' << s << '|' << t << ' ' << u << ") = " << integral
+                              << '\n';
                 }
 
     return integrals;
@@ -593,6 +728,7 @@ hf::Matrix hf::HFSolver::calcElectronRepulsion(
     const hf::Repulsions& integrals, const Matrix& density)
 {
     hf::Matrix repulsion(m_basisSize, m_basisSize);
+#pragma omp parallel for collapse(2)
     for (unsigned int r = 0; r < m_basisSize; r++)
         for (unsigned int s = 0; s < m_basisSize; s++) {
 
@@ -612,40 +748,69 @@ hf::Matrix hf::HFSolver::calcElectronRepulsion(
 double hf::HFSolver::solve(double tolerance)
 {
     auto overlap = calcOverlap();
+
+    std::cout << "Overlap = \n" << overlap << '\n';
+    // std::cout << "OverlapOLD = \n" << calcOverlapOLD() << '\n';
+
     auto kinEnergy = calcKineticEnergy();
+    std::cout << "kinEnergy = \n" << kinEnergy << '\n';
+    // std::cout << "kinEnergyOLD = \n" << calcKineticEnergyOLD() << '\n';
 
     std::vector<Matrix> potentials(m_nuclei.size());
     for (unsigned int i = 0; i < potentials.size(); i++)
         potentials[i] = calcPotential(i);
 
+    for (unsigned int i = 0; i < potentials.size(); i++)
+        std::cout << "p = \n" << potentials[i] << '\n';
+    //<< "pOLD = \n"
+    //<< calcPotentialOLD(i) << '\n';
+
     Matrix hcore = kinEnergy;
     for (const auto& potential : potentials)
         hcore -= potential;
 
+    std::cout << "HCORE = \n" << hcore << '\n';
+
     // Matrix density = guessInitialDensity(hcore);
     Matrix density(m_basisSize, m_basisSize);
     density.setZero(); // Hcore initial guess.
+
+    std::cout << "Initial density:\n" << density << '\n';
 
     // Diagonalize overlap
     Eigen::SelfAdjointEigenSolver<Matrix> solver(overlap, Eigen::ComputeEigenvectors);
     Matrix D = solver.eigenvalues().asDiagonal();
     Matrix P = solver.eigenvectors();
 
+    std::cout << "D = \n" << D << '\n';
+    std::cout << "P = \n" << P << '\n';
+    std::cout << "Pinv = \n" << P.inverse() << '\n';
+
     for (unsigned int i = 0; i < m_basisSize; i++)
         D(i, i) = 1.0 / std::sqrt(std::abs(D(i, i)));
 
+    std::cout << "D = \n" << D << '\n';
+
     Matrix overlap_inv = P * D * P.inverse();
 
+    std::cout << "overlap_inv = \n" << overlap_inv << '\n';
+
+    std::cout << "Repulsion integrals:\n";
     auto repulsionIntegrals = calcRepulsionIntegrals();
+
+    std::cout << "STARTING SCF\n\n";
 
     double maxDelta;
     unsigned int i = 0;
     do {
+        std::cout << "ITERATION: " << i << '\n';
         i++;
 
         auto repulsions = calcElectronRepulsion(repulsionIntegrals, density);
 
         Matrix fockOperator = repulsions + hcore;
+
+        std::cout << "F = \n" << fockOperator << '\n';
 
         fockOperator = overlap_inv * fockOperator * overlap_inv;
 
@@ -658,6 +823,8 @@ double hf::HFSolver::solve(double tolerance)
         density = 0.8 * calcDensity(m_coeff) + 0.2 * prevDensity;
         maxDelta = (prevDensity - density).cwiseAbs().maxCoeff();
 
+        std::cout << "density = \n" << density << '\n';
+        std::cout << "Max delta density = " << maxDelta << '\n' << "\n\n";
     } while (maxDelta > tolerance and i < 70);
 
     if (i >= 70)

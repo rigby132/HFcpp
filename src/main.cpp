@@ -51,7 +51,7 @@ int main(int argc, const char** argv)
     std::cout << "READING STRUCTURE...\n";
     auto structure = hf::readStructureFromFile<double>(structureFile);
 
-    std::cout << "READING BASIS...\n";
+    std::cout << "READING BASIS FUNCTIONS...\n";
     auto basis = hf::readBasisFromFile<double>(basisFile, structure);
 
     std::cout << "SOLVING...\n";

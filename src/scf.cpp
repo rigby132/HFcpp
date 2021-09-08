@@ -13,14 +13,17 @@
 #include "basis.hpp"
 #include "boys.hpp"
 
-#include <Eigen/src/Core/util/Constants.h>
-#include <Eigen/src/Eigenvalues/SelfAdjointEigenSolver.h>
+#include "Eigen/src/Core/util/Constants.h"
+#include "Eigen/src/Eigenvalues/SelfAdjointEigenSolver.h"
+
+#include <omp.h>
+
 #include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstddef>
 
-// TODO REMOVE!
+ // TODO REMOVE!
 #include <cstdio>
 #include <iomanip>
 #include <iostream>
@@ -29,104 +32,108 @@
 constexpr double PI = 3.141592653589793;
 
 hf::HFSolver::HFSolver(const std::vector<CGTO<double>>& basis, const std::vector<Nucleus<>>& nuclei,
-    const unsigned int occupied_orbitals)
-    : m_basis(basis)
-    , m_basisSize(m_basis.size())
-    , m_nuclei(nuclei)
-    , m_occupied(occupied_orbitals)
-    , m_coeff(m_basisSize, m_basisSize)
+	const int occupied_orbitals)
+	: m_basis(basis)
+	, m_basisSize(static_cast<int>(m_basis.size()))
+	, m_nuclei(nuclei)
+	, m_occupied(occupied_orbitals)
+	, m_coeff(m_basisSize, m_basisSize)
 {
-    m_coeff.setZero();
+	m_coeff.setZero();
+
+	if (m_occupied > m_basisSize)
+		throw std::invalid_argument("Not enough basis functions for specified amount of occupied orbitals");
+
+	//TODO other checks.
 }
 
 hf::Matrix hf::HFSolver::calcDensity(const Matrix& coeff)
 {
-    Matrix density(m_basisSize, m_basisSize);
-    density.setZero();
-    for (unsigned int t = 0; t < m_basisSize; t++)
-        for (unsigned int u = 0; u < m_basisSize; u++)
-            for (unsigned int i = 0; i < m_occupied; i++)
-                density(t, u) += 2.0 * coeff(t, i) * coeff(u, i);
+	Matrix density(m_basisSize, m_basisSize);
+	density.setZero();
+	for (int t = 0; t < m_basisSize; t++)
+		for (int u = 0; u < m_basisSize; u++)
+			for (int i = 0; i < m_occupied; i++)
+				density(t, u) += 2.0 * coeff(t, i) * coeff(u, i);
 
-    return density;
+	return density;
 }
 
 template <typename FLOAT = double>
 FLOAT calcSingleOverlap(
-    const FLOAT a, const FLOAT b, const FLOAT a_x, FLOAT b_x, const int qa, const int qb)
+	const FLOAT a, const FLOAT b, const FLOAT a_x, FLOAT b_x, const size_t qa, const size_t qb)
 {
-    assert(qa >= 0);
-    assert(qb >= 0);
+	// Some useful constants
+	const FLOAT p = a + b;
+	const FLOAT mu = a * b / p;
+	// const FLOAT p_x = (a * a_x + b * b_x) / p;
+	const FLOAT x_ab = a_x - b_x;
+	const FLOAT k_ab = std::exp(-mu * x_ab * x_ab);
+	const FLOAT x_pa = -b * x_ab / p;
+	const FLOAT x_pb = a * x_ab / p;
 
-    // Some useful constants
-    const FLOAT p = a + b;
-    const FLOAT mu = a * b / p;
-    // const FLOAT p_x = (a * a_x + b * b_x) / p;
-    const FLOAT x_ab = a_x - b_x;
-    const FLOAT k_ab = std::exp(-mu * x_ab * x_ab);
-    const FLOAT x_pa = -b * x_ab / p;
-    const FLOAT x_pb = a * x_ab / p;
+	// Overlap integrals (over product of 2 GTOs) for all quantum numbers up to S_ij.
+	constexpr auto nan = std::numeric_limits<FLOAT>::quiet_NaN();
 
-    // Overlap integrals (over product of 2 GTOs) for all quantum numbers up to S_ij.
-    auto nan = std::numeric_limits<FLOAT>::quiet_NaN();
+	std::vector<std::vector<FLOAT>> S(qa >= 2 ? qa + 1 : 2, std::vector<FLOAT>(qb >= 2 ? qb + 1 : 2, nan));
+	S[0][0] = std::sqrt(PI / p) * k_ab;
+	S[1][0] = x_pa * S[0][0];
+	S[0][1] = x_pb * S[0][0];
+	S[1][1] = x_pa * S[0][1] + 0.5 * S[0][0] / p;
 
-    std::vector<std::vector<FLOAT>> S(qa + 2, std::vector<FLOAT>(qb + 2, nan));
-    S[0][0] = std::sqrt(PI / p) * k_ab;
-    S[1][0] = x_pa * S[0][0];
-    S[0][1] = x_pb * S[0][0];
-    S[1][1] = x_pa * S[0][1] + 0.5 * S[0][0] / p;
+	if (qa >= qb) {
+		// Fill S with values for all i  and j = 0 and 1.
+		for (size_t i = 2; i <= qa; i++) {
+			S[i][0] = x_pa * S[i - 1][0] + (0.5 / p) * (i - 1.0) * S[i - 2][0];
+			S[i][1] = x_pa * S[i - 1][1] + (0.5 / p) * ((i - 1.0) * S[i - 2][1] + S[i - 1][0]);
+		}
 
-    if (qa >= qb) {
-        // Fill S with values for all i  and j = 0 and 1.
-        for (int i = 2; i <= qa; i++) {
-            S[i][0] = x_pa * S[i - 1][0] + (0.5 / p) * (i - 1) * S[i - 2][0];
-            S[i][1] = x_pa * S[i - 1][1] + (0.5 / p) * ((i - 1) * S[i - 2][1] + S[i - 1][0]);
-        }
+		// Move up to reach j = qb by recursion.
+		for (size_t j = 2; j <= qb; j++)
+			for (size_t i = qa - qb + j; i <= qa; i++)
+				S[i][j]
+				= x_pb * S[i][j - 1] + (i * S[i - 1][j - 1] + (j - 1.0) * S[i][j - 2]) / (2 * p);
+	}
+	else {
+		// Fill S with values for all j  and i = 0 and 1.
+		for (size_t j = 2; j <= qb; j++) {
+			S[0][j] = x_pb * S[0][j - 1] + (0.5 / p) * (j - 1.0) * S[0][j - 2];
+			S[1][j] = x_pb * S[1][j - 1] + (0.5 / p) * ((j - 1.0) * S[1][j - 2] + S[0][j - 1]);
+		}
 
-        // Move up to reach j = qb by recursion.
-        for (int j = 2; j <= qb; j++)
-            for (int i = qa - qb + j; i <= qa; i++)
-                S[i][j]
-                    = x_pb * S[i][j - 1] + (i * S[i - 1][j - 1] + (j - 1) * S[i][j - 2]) / (2 * p);
-    } else {
-        // Fill S with values for all j  and i = 0 and 1.
-        for (int j = 2; j <= qa; j++) {
-            S[0][j] = x_pb * S[0][j - 1] + (0.5 / p) * (j - 1) * S[0][j - 2];
-            S[1][j] = x_pb * S[1][j - 1] + (0.5 / p) * ((j - 1) * S[1][j - 2] + S[0][j - 1]);
-        }
+		// Move up to reach i = qa by recursion.
+		for (size_t i = 2; i <= qa; i++)
+			for (size_t j = qb - qa + i; j <= qb; j++)
+				S[i][j]
+				= x_pa * S[i - 1][j] + ((i - 1.0) * S[i - 2][j] + j * S[i - 1][j - 1]) / (2 * p);
+	}
 
-        // Move up to reach i = qa by recursion.
-        for (int i = 2; i <= qa; i++)
-            for (int j = qb - qa + i; j <= qb; j++)
-                S[i][j]
-                    = x_pa * S[i - 1][j] + ((i - 1) * S[i - 2][j] + j * S[i - 1][j - 1]) / (2 * p);
-    }
-
-    return S[qa][qb];
+	return S[qa][qb];
 }
 
 hf::Matrix hf::HFSolver::calcOverlap()
 {
-    Matrix overlap(m_basisSize, m_basisSize);
+	Matrix overlap(m_basisSize, m_basisSize);
 
-    for (unsigned int r = 0; r < m_basisSize; r++)
-        for (unsigned int s = 0; s < m_basisSize; s++) {
-            const auto& cg0 = m_basis[r];
-            const auto& cg1 = m_basis[s];
+	for (int r = 0; r < m_basisSize; r++)
+		for (int s = 0; s < m_basisSize; s++) {
+			const auto& cg0 = m_basis[r];
+			const auto& cg1 = m_basis[s];
 
-            double sum = 0.0;
-            // Calc overlap between cgto0 and cgto1
-            for (const auto& g0 : cg0.gtos_)
-                for (const auto& g1 : cg1.gtos_)
-                    sum += g0.c_ * g1.c_
-                        * calcSingleOverlap(g0.a_, g1.a_, cg0.cx_, cg1.cx_, g0.i_, g1.i_)
-                        * calcSingleOverlap(g0.a_, g1.a_, cg0.cy_, cg1.cy_, g0.j_, g1.j_)
-                        * calcSingleOverlap(g0.a_, g1.a_, cg0.cz_, cg1.cz_, g0.k_, g1.k_);
+			double sum = 0.0;
+			// Calc overlap between cgto0 and cgto1
+			for (const auto& g0 : cg0.gtos_)
+				for (const auto& g1 : cg1.gtos_)
+					sum += g0.c_ * g1.c_
+					* calcSingleOverlap(g0.a_, g1.a_, cg0.cx_, cg1.cx_, g0.i_, g1.i_)
+					* calcSingleOverlap(g0.a_, g1.a_, cg0.cy_, cg1.cy_, g0.j_, g1.j_)
+					* calcSingleOverlap(g0.a_, g1.a_, cg0.cz_, cg1.cz_, g0.k_, g1.k_);
 
-            overlap(r, s) = sum;
-        }
+			assert(!std::isnan(sum));
+			overlap(r, s) = sum;
+		}
 
-    return overlap;
+	return overlap;
 }
 
 /**
@@ -144,230 +151,144 @@ hf::Matrix hf::HFSolver::calcOverlap()
  */
 template <typename FLOAT = double>
 FLOAT calcSingleKinEnergy(
-    const FLOAT a, const FLOAT b, const FLOAT a_x, FLOAT b_x, const int qa, const int qb)
+	const FLOAT a, const FLOAT b, const FLOAT a_x, const FLOAT b_x, const size_t qa, const size_t qb)
 {
-    assert(qa >= 0);
-    assert(qb >= 0);
+	FLOAT d = 4 * a * a * calcSingleOverlap(a, b, a_x, b_x, qa + 2, qb) - 2 * a * (2.0 * qa + 1.0) * calcSingleOverlap(a, b, a_x, b_x, qa, qb);
+	if (qa > 1)
+		d += qa * (qa - 1.0) * calcSingleOverlap(a, b, a_x, b_x, qa - 2, qb);
 
-    // Some useful constants
-    const FLOAT p = a + b;
-    const FLOAT mu = a * b / p;
-    const FLOAT p_x = (a * a_x + b * b_x) / p;
-    const FLOAT x_ab = a_x - b_x;
-    const FLOAT k_ab = std::exp(-mu * x_ab * x_ab);
-    const FLOAT x_pb = p_x - b_x;
-    const FLOAT x_pa = p_x - a_x;
-
-    // Overlap integrals (over product of 2 GTOs) for all quantum numbers up to S_i+2,j+2.
-    auto nan = std::numeric_limits<FLOAT>::quiet_NaN();
-    std::vector<std::vector<FLOAT>> S(qa + 1 + 2, std::vector<FLOAT>(qb + 1 + 2, nan));
-
-    S[0][0] = std::sqrt(PI / p) * k_ab;
-    S[1][0] = x_pa * S[0][0];
-    S[0][1] = x_pb * S[0][0];
-    S[1][1] = x_pa * S[0][1] + 0.5 * S[0][0] / p;
-
-    // Fill the matrix with starting values for the general recursion.
-    // S for i = 0 or j = 0
-    for (int i = 2; i <= qa + 2; i++)
-        S[i][0] = x_pa * S[i - 1][0] + (0.5 / p) * (i - 1) * S[i - 2][0];
-
-    for (int j = 2; j <= qb + 2; j++)
-        S[0][j] = x_pb * S[0][j - 1] + (0.5 / p) * (j - 1) * S[0][j - 2];
-
-    // S for i = 1 or j = 1
-    for (int j = 2; j <= qb + 2; j++)
-        S[1][j] = x_pa * S[0][j] + (0.5 / p) * j * S[0][j - 1];
-
-    for (int i = 2; i <= qa + 2; i++)
-        S[i][1] = x_pb * S[i][0] + (0.5 / p) * i * S[i - 1][0];
-
-    // S for i >= 2 or j >= 2
-    for (int i = 2; i <= qa + 2; i++)
-        for (int j = 2; j <= qb + 2; j++)
-            S[i][j] = x_pa * S[i - 1][j] + ((i - 1) * S[i - 2][j] + j * S[i - 1][j - 1]) / (2 * p);
-
-    FLOAT D = 4 * a * a * S[qa + 2][qb] - 2 * a * (2 * qa + 1) * S[qa][qb];
-    if (qa > 1)
-        D += qa * (qa - 1) * S[qa - 2][qb];
-
-    return D;
+	return d;
 }
 
 hf::Matrix hf::HFSolver::calcKineticEnergy()
 {
-    Matrix kinEnergy(m_basisSize, m_basisSize);
+	Matrix kinEnergy(m_basisSize, m_basisSize);
 
-    for (unsigned int r = 0; r < m_basisSize; r++)
-        for (unsigned int s = 0; s < m_basisSize; s++) {
-            const auto& cg0 = m_basis[r];
-            const auto& cg1 = m_basis[s];
+	for (int r = 0; r < m_basisSize; r++)
+		for (int s = 0; s < m_basisSize; s++) {
+			const auto& cg0 = m_basis[r];
+			const auto& cg1 = m_basis[s];
 
-            double sum = 0;
-            // Calc overlap between cgto0 and cgto1
-            for (const auto& g0 : cg0.gtos_)
-                for (const auto& g1 : cg1.gtos_) {
-                    sum += -0.5 * g0.c_ * g1.c_
-                        * calcSingleKinEnergy(g0.a_, g1.a_, cg0.cx_, cg1.cx_, g0.i_, g1.i_)
-                        * calcSingleOverlap(g0.a_, g1.a_, cg0.cy_, cg1.cy_, g0.j_, g1.j_)
-                        * calcSingleOverlap(g0.a_, g1.a_, cg0.cz_, cg1.cz_, g0.k_, g1.k_);
+			double sum = 0;
+			// Calc overlap between cgto0 and cgto1
+			for (const auto& g0 : cg0.gtos_)
+				for (const auto& g1 : cg1.gtos_) {
+					sum += -0.5 * g0.c_ * g1.c_
+						* calcSingleKinEnergy(g0.a_, g1.a_, cg0.cx_, cg1.cx_, g0.i_, g1.i_)
+						* calcSingleOverlap(g0.a_, g1.a_, cg0.cy_, cg1.cy_, g0.j_, g1.j_)
+						* calcSingleOverlap(g0.a_, g1.a_, cg0.cz_, cg1.cz_, g0.k_, g1.k_);
 
-                    sum += -0.5 * g0.c_ * g1.c_
-                        * calcSingleOverlap(g0.a_, g1.a_, cg0.cx_, cg1.cx_, g0.i_, g1.i_)
-                        * calcSingleKinEnergy(g0.a_, g1.a_, cg0.cy_, cg1.cy_, g0.j_, g1.j_)
-                        * calcSingleOverlap(g0.a_, g1.a_, cg0.cz_, cg1.cz_, g0.k_, g1.k_);
+					sum += -0.5 * g0.c_ * g1.c_
+						* calcSingleOverlap(g0.a_, g1.a_, cg0.cx_, cg1.cx_, g0.i_, g1.i_)
+						* calcSingleKinEnergy(g0.a_, g1.a_, cg0.cy_, cg1.cy_, g0.j_, g1.j_)
+						* calcSingleOverlap(g0.a_, g1.a_, cg0.cz_, cg1.cz_, g0.k_, g1.k_);
 
-                    sum += -0.5 * g0.c_ * g1.c_
-                        * calcSingleOverlap(g0.a_, g1.a_, cg0.cx_, cg1.cx_, g0.i_, g1.i_)
-                        * calcSingleOverlap(g0.a_, g1.a_, cg0.cy_, cg1.cy_, g0.j_, g1.j_)
-                        * calcSingleKinEnergy(g0.a_, g1.a_, cg0.cz_, cg1.cz_, g0.k_, g1.k_);
-                }
-            kinEnergy(r, s) = sum;
-        }
+					sum += -0.5 * g0.c_ * g1.c_
+						* calcSingleOverlap(g0.a_, g1.a_, cg0.cx_, cg1.cx_, g0.i_, g1.i_)
+						* calcSingleOverlap(g0.a_, g1.a_, cg0.cy_, cg1.cy_, g0.j_, g1.j_)
+						* calcSingleKinEnergy(g0.a_, g1.a_, cg0.cz_, cg1.cz_, g0.k_, g1.k_);
+				}
 
-    return kinEnergy;
+			assert(!std::isnan(sum));
+			kinEnergy(r, s) = sum;
+		}
+
+	return kinEnergy;
 }
 
 template <typename FLOAT = double>
 std::vector<FLOAT> calcPotentialIntegral(const std::vector<FLOAT>& start, const int qa,
-    const int qb, const FLOAT x_pa, const FLOAT x_pz, const FLOAT x_ab, const FLOAT p)
+	const int qb, const FLOAT x_pa, const FLOAT x_pz, const FLOAT x_ab, const FLOAT p)
 {
-    const int N = static_cast<int>(start.size()) - 1;
-    const int qn = qa + qb; // Calculate up to i+1
+	assert(start.size() > 0);
 
-    assert(N >= 0);
-    assert(qn >= 0);
-    assert(N >= qn);
+	const int N = static_cast<int>(start.size()) - 1;
+	const int qn = qa + qb; // Calculate up to i+1
 
-    auto nan = std::numeric_limits<FLOAT>::quiet_NaN();
+	assert(N >= qn);
 
-    // Create single 3d array for all recursion elements
-    std::vector<std::vector<std::vector<FLOAT>>> theta(
-        qn + 1, std::vector<std::vector<FLOAT>>(qb + 1, std::vector<FLOAT>(N + 1, nan)));
+	constexpr auto nan = std::numeric_limits<FLOAT>::quiet_NaN();
 
-    // Set initial values.
-    theta[0][0] = start;
+	// Create single 3d array for all recursion elements
+	std::vector<std::vector<std::vector<FLOAT>>> theta(
+		qn + 1, std::vector<std::vector<FLOAT>>(qb + 1, std::vector<FLOAT>(N + 1, nan)));
 
-    // Calculate all thetas[i][0][n] up to i=qn and n = N
-    for (int i = 1; i <= qn; i++) {
-        for (int n = N - i; n >= 0; n--) {
-            theta[i][0][n] = x_pa * theta[i - 1][0][n] - x_pz * theta[i - 1][0][n + 1];
+	// Set initial values.
+	theta[0][0] = start;
 
-            if (i - 1 > 0)
-                theta[i][0][n] += 0.5 * (i - 1) * (theta[i - 2][0][n] - theta[i - 2][0][n + 1]) / p;
-        }
-    }
+	// Calculate all thetas[i][0][n] up to i=qn and n = N
+	for (int i = 1; i <= qn; i++) {
+		for (int n = N - i; n >= 0; n--) {
+			theta[i][0][n] = x_pa * theta[i - 1][0][n] - x_pz * theta[i - 1][0][n + 1];
 
-    // Do horizontal recursion for j.
-    for (int j = 1; j <= qb; j++) {
-        for (int i = qa; i <= qn - j; i++) {
-            for (int n = 0; n <= N - qn; n++)
-                theta[i][j][n] = theta[i + 1][j - 1][n] + x_ab * theta[i][j - 1][n];
-        }
-    }
+			if (i > 1)
+				theta[i][0][n] += 0.5 * (i - 1.0) * (theta[i - 2][0][n] - theta[i - 2][0][n + 1]) / p;
+		}
+	}
 
-    // Return only needed orders of theta(0 to N-qn)
-    std::vector<FLOAT> result(theta[qa][qb].begin(), theta[qa][qb].begin() + N - qn + 1);
+	// Do horizontal recursion for j.
+	for (int j = 1; j <= qb; j++)
+		for (int i = qa; i <= qn - j; i++)
+			for (int n = 0; n <= N - qn; n++)
+				theta[i][j][n] = theta[i + 1][j - 1][n] + x_ab * theta[i][j - 1][n];
 
-    return result;
-
-    /*========================================
-    // Do vertical recursion for i.
-    std::vector<std::vector<FLOAT>> theta(qn + 1);
-    theta[0] = start; // Fills theta[0][n] for all n.
-
-    for (int i = 1; i <= qn; i++) {
-        theta[i] = std::vector<FLOAT>(N - i + 1, nan);
-
-        for (int n = N - i; n >= 0; n--) {
-            theta[i][n] = x_pa * theta[i - 1][n] - x_pz * theta[i - 1][n + 1];
-
-            if (i - 1 > 0)
-                theta[i][n] += 0.5 * (i - 1) * (theta[i - 2][n] - theta[i - 2][n + 1]) / p;
-        }
-    }
-
-    // Do horizontal recursion for j.
-    std::vector<std::vector<std::vector<FLOAT>>> kappa(qb + 1);
-
-    // Remove stuff smaller than index i.
-    if (qa > 0)
-        theta.erase(theta.begin(), theta.begin() + qa);
-
-    // Update max order N
-    const FLOAT N2 = N - qa;
-
-    // Init for j = 0
-    kappa[0] = theta;
-
-    for (int j = 1; j <= qb; j++) {
-        kappa[j] = std::vector<std::vector<FLOAT>>(qb - j + 1);
-
-        for (int i = 0; i <= qb - j; i++) {
-            kappa[j][i] = std::vector<FLOAT>(N2 - j + 1);
-
-            for (int n = 0; n <= N2 - j; n++)
-                kappa[j][i][n] = kappa[j - 1][i + 1][n] + x_ab * kappa[j - 1][i][n];
-        }
-    }
-
-    // Returns potential with quantum number j == qb and i == qa (shifted left by qa)
-    return kappa[qb][0];*/
+	// Return only needed orders of theta(0 to N-qn)
+	return std::vector<FLOAT>(theta[qa][qb].begin(), theta[qa][qb].begin() + N - qn + 1);
 }
 
-hf::Matrix hf::HFSolver::calcPotential(size_t i)
+hf::Matrix hf::HFSolver::calcPotential(int i)
 {
-    hf::Matrix potential(m_basisSize, m_basisSize);
-    const auto& nuc = m_nuclei.at(i);
+	hf::Matrix potential(m_basisSize, m_basisSize);
+	const auto& nuc = m_nuclei.at(i);
 
-    for (unsigned int r = 0; r < m_basisSize; r++)
-        for (unsigned int s = 0; s < m_basisSize; s++) {
+	for (int r = 0; r < m_basisSize; r++)
+		for (int s = 0; s < m_basisSize; s++) {
 
-            const CGTO<double>& cg0 = m_basis[r];
-            const CGTO<double>& cg1 = m_basis[s];
+			const CGTO<double>& cg0 = m_basis[r];
+			const CGTO<double>& cg1 = m_basis[s];
 
-            const double x_ab = cg0.cx_ - cg1.cx_;
-            const double y_ab = cg0.cy_ - cg1.cy_;
-            const double z_ab = cg0.cz_ - cg1.cz_;
+			const auto x_ab = cg0.cx_ - cg1.cx_;
+			const auto y_ab = cg0.cy_ - cg1.cy_;
+			const auto z_ab = cg0.cz_ - cg1.cz_;
 
-            double sum = 0;
-            for (const GTO<double>& g0 : cg0.gtos_)
-                for (const GTO<double>& g1 : cg1.gtos_) {
+			double sum = 0;
+			for (const GTO<double>& g0 : cg0.gtos_)
+				for (const GTO<double>& g1 : cg1.gtos_) {
 
-                    const double a = g0.a_;
-                    const double b = g1.a_;
-                    const double p = a + b;
-                    const double px = (a * cg0.cx_ + b * cg1.cx_) / p;
-                    const double py = (a * cg0.cy_ + b * cg1.cy_) / p;
-                    const double pz = (a * cg0.cz_ + b * cg1.cz_) / p;
-                    const double mu = a * b / (a + b);
-                    const double k_ab = std::exp(-mu * (x_ab * x_ab + y_ab * y_ab + z_ab * z_ab));
+					const auto a = g0.a_;
+					const auto b = g1.a_;
+					const auto p = a + b;
+					const auto px = (a * cg0.cx_ + b * cg1.cx_) / p;
+					const auto py = (a * cg0.cy_ + b * cg1.cy_) / p;
+					const auto pz = (a * cg0.cz_ + b * cg1.cz_) / p;
+					const auto mu = a * b / (a + b);
+					const auto k_ab = std::exp(-mu * (x_ab * x_ab + y_ab * y_ab + z_ab * z_ab));
 
-                    const double sep2 = (px - nuc.x) * (px - nuc.x) + (py - nuc.y) * (py - nuc.y)
-                        + (pz - nuc.z) * (pz - nuc.z);
+					const auto sep2 = (px - nuc.x) * (px - nuc.x) + (py - nuc.y) * (py - nuc.y)
+						+ (pz - nuc.z) * (pz - nuc.z);
 
-                    const int N = g0.i_ + g0.j_ + g0.k_ + g1.i_ + g1.j_ + g1.k_;
+					const auto N = g0.i_ + g0.j_ + g0.k_ + g1.i_ + g1.j_ + g1.k_;
 
-                    double nan = std::numeric_limits<double>::quiet_NaN();
+					constexpr double nan = std::numeric_limits<double>::quiet_NaN();
 
-                    std::vector<double> potential(N + 1, nan);
-                    for (int n = 0; n <= N; n++)
-                        potential[n] = (2 * PI / p) * k_ab * boys(n, p * sep2);
+					std::vector<double> potentials(N + 1, nan);
+					for (int n = 0; n <= N; n++)
+						potentials[n] = (2 * PI / p) * k_ab * boys(n, p * sep2);
 
-                    potential = calcPotentialIntegral(
-                        potential, g0.i_, g1.i_, px - cg0.cx_, px - nuc.x, x_ab, p);
-                    potential = calcPotentialIntegral(
-                        potential, g0.j_, g1.j_, py - cg0.cy_, py - nuc.y, y_ab, p);
-                    potential = calcPotentialIntegral(
-                        potential, g0.k_, g1.k_, pz - cg0.cz_, pz - nuc.z, z_ab, p);
+					potentials = calcPotentialIntegral(
+						potentials, g0.i_, g1.i_, px - cg0.cx_, px - nuc.x, x_ab, p);
+					potentials = calcPotentialIntegral(
+						potentials, g0.j_, g1.j_, py - cg0.cy_, py - nuc.y, y_ab, p);
+					potentials = calcPotentialIntegral(
+						potentials, g0.k_, g1.k_, pz - cg0.cz_, pz - nuc.z, z_ab, p);
 
-                    sum += g0.c_ * g1.c_ * nuc.charge * potential[0];
-                }
-            assert(!std::isnan(sum));
+					sum += g0.c_ * g1.c_ * static_cast<double>(nuc.charge) * potentials[0];
+				}
+			assert(!std::isnan(sum));
 
-            potential(r, s) = sum;
-        }
-    return potential;
+			potential(r, s) = sum;
+		}
+	return potential;
 }
 
 /**
@@ -382,324 +303,344 @@ hf::Matrix hf::HFSolver::calcPotential(size_t i)
  */
 template <typename FLOAT = double>
 std::vector<FLOAT> calcSingleRepulsionIntegral(const std::vector<FLOAT>& start,
-    const int (&quantum)[4], const FLOAT (&expo)[4], const FLOAT (&cx)[4])
+	const int(&quantum)[4], const FLOAT(&expo)[4], const FLOAT(&cx)[4])
 {
-    // TODO Add FLOAT assert checks everywhere.
+	// TODO Add FLOAT assert checks everywhere.
 
-    // The highest order to reach in each recursion.
-    const int N = start.size() - 1;
-    assert(N >= 0);
+	assert(start.size() > 0);
 
-    // The quantum numbers to reach.
-    const int qi = quantum[0];
-    const int qj = quantum[1];
-    const int qk = quantum[2];
-    const int ql = quantum[3];
+	// The highest order to reach in each recursion.
+	const int N = static_cast<int>(start.size()) - 1;
 
-    // Define constants used in the recursions.
-    const FLOAT p = expo[0] + expo[1];
-    const FLOAT px = (expo[0] * cx[0] + expo[1] * cx[1]) / p;
-    const FLOAT q = expo[2] + expo[3];
-    const FLOAT qx = (expo[2] * cx[2] + expo[3] * cx[3]) / q;
-    const FLOAT x_ab = cx[0] - cx[1];
-    const FLOAT x_cd = cx[2] - cx[3];
-    const FLOAT x_pa = px - cx[0];
-    const FLOAT x_pq = px - qx;
-    const FLOAT a = p * q / (p + q);
+	// The quantum numbers to reach.
+	const auto qi = quantum[0];
+	const auto qj = quantum[1];
+	const auto qk = quantum[2];
+	const auto ql = quantum[3];
 
-    const FLOAT nan = std::numeric_limits<FLOAT>::quiet_NaN();
+	// This function uses qi+qj+qk+ql orders up with N provided.
+	// => So N must be at least equal to that.
+	assert(N >= qi + qj + qk + ql);
 
-    // First recursion: Get first index up to u+j+k+l(the sum of all quantum numbers) .
-    std::vector<std::vector<FLOAT>> theta(qi + qj + qk + ql + 1);
-    theta[0] = start;
+	// Define constants used in the recursions.
+	const FLOAT p = expo[0] + expo[1];
+	const FLOAT px = (expo[0] * cx[0] + expo[1] * cx[1]) / p;
+	const FLOAT q = expo[2] + expo[3];
+	const FLOAT qx = (expo[2] * cx[2] + expo[3] * cx[3]) / q;
+	const FLOAT x_ab = cx[0] - cx[1];
+	const FLOAT x_cd = cx[2] - cx[3];
+	const FLOAT x_pa = px - cx[0];
+	const FLOAT x_pq = px - qx;
+	const FLOAT a = p * q / (p + q);
 
-    // The first recursion must go up to i = sum(quantum)
-    // so enough values are available for the other recursions.
-    for (int i = 1; i <= qi + qj + qk + ql; i++) {
-        theta[i] = std::vector<FLOAT>(N - i + 1, nan);
-        for (int n = 0; n <= N - i; n++) {
-            theta[i][n] = x_pa * theta[i - 1][n] - a * x_pq * theta[i - 1][n + 1] / p;
+	const FLOAT nan = std::numeric_limits<FLOAT>::quiet_NaN();
 
-            if (i - 2 >= 0)
-                theta[i][n] += (i - 1) * (theta[i - 2][n] - a * theta[i - 2][n + 1] / p) / (2 * p);
-        }
-    }
+	// First recursion: Get first index up to u+j+k+l(the sum of all quantum numbers) .
+	std::vector<std::vector<FLOAT>> theta(qi + qj + qk + ql + 1);
+	theta[0] = start;
 
-    // Second recursion:
-    std::vector<std::vector<std::vector<FLOAT>>> omega(qk + ql + 1);
-    omega[0] = theta;
+	// The first recursion must go up to i = sum(quantum)
+	// so enough values are available for the other recursions.
+	for (int i = 1; i <= qi + qj + qk + ql; i++) {
+		theta[i] = std::vector<FLOAT>(N - i + 1, nan);
+		for (int n = 0; n <= N - i; n++) {
+			theta[i][n] = x_pa * theta[i - 1][n] - a * x_pq * theta[i - 1][n + 1] / p;
 
-    for (int k = 1; k <= qk + ql; k++) {
-        omega[k] = std::vector<std::vector<FLOAT>>(qi + qj + qk + ql - k + 1);
+			if (i >= 2)
+				theta[i][n] += (i - 1.0) * (theta[i - 2][n] - a * theta[i - 2][n + 1] / p) / (2 * p);
+		}
+	}
 
-        for (int i = 0; i <= qi + qj + qk + ql - k; i++) {
-            omega[k][i] = std::vector<FLOAT>(N - qi - qj - qk - ql + 1);
+	// Second recursion:
+	std::vector<std::vector<std::vector<FLOAT>>> omega(qk + ql + 1);
+	omega[0] = theta;
 
-            for (int n = 0; n <= N - qi - qj - qk - ql; n++) {
-                const FLOAT factor = -(expo[1] * x_ab + expo[3] * x_cd) / q;
-                FLOAT val = factor * omega[k - 1][i][n] - p * omega[k - 1][i + 1][n] / q;
+	for (int k = 1; k <= qk + ql; k++) {
+		omega[k] = std::vector<std::vector<FLOAT>>(qi + qj + qk + ql - k + 1);
 
-                if (i > 0)
-                    val += i * omega[k - 1][i - 1][n] / (2 * q);
+		for (int i = 0; i <= qi + qj + qk + ql - k; i++) {
+			omega[k][i] = std::vector<FLOAT>(N - qi - qj - qk - ql + 1);
 
-                if (k > 1)
-                    val += (k - 1) * omega[k - 2][i][n] / (2 * q);
+			for (int n = 0; n <= N - qi - qj - qk - ql; n++) {
+				const FLOAT factor = -(expo[1] * x_ab + expo[3] * x_cd) / q;
+				FLOAT val = factor * omega[k - 1][i][n] - p * omega[k - 1][i + 1][n] / q;
 
-                omega[k][i][n] = val;
-            }
-        }
-    }
+				if (i > 0)
+					val += i * omega[k - 1][i - 1][n] / (2 * q);
 
-    // Third recursion:
-    std::vector<std::vector<std::vector<std::vector<FLOAT>>>> tau(qj + 1);
-    tau[0] = omega;
+				if (k > 1)
+					val += (k - 1.0) * omega[k - 2][i][n] / (2 * q);
 
-    for (int j = 1; j <= qj; j++) {
-        tau[j] = std::vector<std::vector<std::vector<FLOAT>>>(qk + ql + 1);
+				omega[k][i][n] = val;
+			}
+		}
+	}
 
-        for (int k = 0; k <= qk + ql; k++) {
-            tau[j][k] = std::vector<std::vector<FLOAT>>(qi + qj - j + 1);
+	// Third recursion:
+	std::vector<std::vector<std::vector<std::vector<FLOAT>>>> tau(qj + 1, std::vector<std::vector<std::vector<FLOAT>>>(qk + ql + 1));
+	tau[0] = omega;
 
-            for (int i = 0; i <= qi + qj - j; i++) {
-                tau[j][k][i] = std::vector<FLOAT>(N - qi - qj - qk - ql + 1);
+	for (int j = 1; j <= qj; j++)
+		for (int k = 0; k <= qk + ql; k++) {
+			tau[j][k] = std::vector<std::vector<FLOAT>>(qi + qj - j + 1, std::vector<FLOAT>(N - qi - qj - qk - ql + 1, nan));
 
-                for (int n = 0; n <= N - qi - qj - qk - ql; n++)
-                    tau[j][k][i][n] = tau[j - 1][k][i + 1][n] + x_ab * tau[j - 1][k][i][n];
-            }
-        }
-    }
+			for (int i = 0; i <= qi + qj - j; i++)
+				for (int n = 0; n <= N - qi - qj - qk - ql; n++)
+					tau[j][k][i][n] = tau[j - 1][k][i + 1][n] + x_ab * tau[j - 1][k][i][n];
+		}
 
-    // Fourth recursion:
-    // Use smaller table because i & j do not need to change anymore.
-    std::vector<std::vector<std::vector<FLOAT>>> chi(ql + 1);
-    chi[0] = std::vector<std::vector<FLOAT>>(qk + ql + 1);
+	// Fourth recursion:
+	// Use smaller table because i & j do not need to change anymore.
+	std::vector<std::vector<std::vector<FLOAT>>> chi(ql + 1);
+	chi[0] = std::vector<std::vector<FLOAT>>(qk + ql + 1);
 
-    for (int k = 0; k <= qk + ql; k++) {
-        chi[0][k] = std::vector<FLOAT>(N - qi - qj - qk - ql + 1, nan);
-        for (int n = 0; n <= N - qi - qj - qk - ql; n++) {
-            chi[0][k][n] = tau[qj][k][qi][n];
-        }
-    }
+	for (int k = 0; k <= qk + ql; k++) {
+		chi[0][k] = std::vector<FLOAT>(N - qi - qj - qk - ql + 1, nan);
+		for (int n = 0; n <= N - qi - qj - qk - ql; n++) {
+			chi[0][k][n] = tau[qj][k][qi][n];
+		}
+	}
 
-    for (int l = 1; l <= ql; l++) {
-        chi[l] = std::vector<std::vector<FLOAT>>(qk + ql - l + 1);
+	for (int l = 1; l <= ql; l++) {
+		chi[l] = std::vector<std::vector<FLOAT>>(qk + ql - l + 1, std::vector<FLOAT>(N - qi - qj - qk - ql + 1, nan));
 
-        for (int k = 0; k <= qk + ql - l; k++) {
-            chi[l][k] = std::vector<FLOAT>(N - qi - qj - qk - ql + 1, nan);
+		for (int k = 0; k <= qk + ql - l; k++)
+			for (int n = 0; n <= N - qi - qj - qk - ql; n++)
+				chi[l][k][n] = chi[l - 1][k + 1][n] + x_cd * chi[l - 1][k][n];
+	}
 
-            for (int n = 0; n <= N - qi - qj - qk - ql; n++)
-                chi[l][k][n] = chi[l - 1][k + 1][n] + x_cd * chi[l - 1][k][n];
-        }
-    }
-
-    return chi[ql][qk];
+	return chi[ql][qk];
 }
 
 hf::Repulsions hf::HFSolver::calcRepulsionIntegrals()
 {
-    Repulsions integrals(m_basisSize);
+	constexpr double nan = std::numeric_limits<double>::quiet_NaN();
 
-    for (auto& lvl1 : integrals) {
-        lvl1.resize(m_basisSize);
-        for (auto& lvl2 : lvl1) {
-            lvl2.resize(m_basisSize);
-            for (auto& lvl3 : lvl2)
-                lvl3.resize(m_basisSize);
-        }
-    }
+	Repulsions integrals(static_cast<size_t>(m_basisSize));
 
-    double nan = std::numeric_limits<double>::quiet_NaN();
+	for (auto& lvl1 : integrals) {
+		lvl1.resize(static_cast<size_t>(m_basisSize));
+		for (auto& lvl2 : lvl1) {
+			lvl2.resize(static_cast<size_t>(m_basisSize));
+			for (auto& lvl3 : lvl2)
+				lvl3.resize(static_cast<size_t>(m_basisSize), nan);
+		}
+	}
 
-    for (unsigned int r = 0; r < m_basisSize; r++)
-        for (unsigned int s = 0; s < m_basisSize; s++)
-            for (unsigned int t = 0; t < m_basisSize; t++)
-                for (unsigned int u = 0; u < m_basisSize; u++) {
-                    const auto& cg0 = m_basis[r];
-                    const auto& cg1 = m_basis[s];
-                    const auto& cg2 = m_basis[t];
-                    const auto& cg3 = m_basis[u];
+#pragma omp parallel for schedule(guided)
+	for (int r = 0; r < m_basisSize; r++)
+		for (int s = 0; s < m_basisSize; s++)
+			for (int t = 0; t < m_basisSize; t++)
+				for (int u = 0; u < m_basisSize; u++) {
+					const auto& cg0 = m_basis[r];
+					const auto& cg1 = m_basis[s];
+					const auto& cg2 = m_basis[t];
+					const auto& cg3 = m_basis[u];
 
-                    double sum = 0;
+					double sum = 0;
 
-                    for (const auto& g0 : cg0.gtos_)
-                        for (const auto& g1 : cg1.gtos_)
-                            for (const auto& g2 : cg2.gtos_)
-                                for (const auto& g3 : cg3.gtos_) {
-                                    int qsum = g0.i_ + g1.i_ + g2.i_ + g3.i_;
-                                    qsum += g0.j_ + g1.j_ + g2.j_ + g3.j_;
-                                    qsum += g0.k_ + g1.k_ + g2.k_ + g3.k_;
+					for (const auto& g0 : cg0.gtos_)
+						for (const auto& g1 : cg1.gtos_)
+							for (const auto& g2 : cg2.gtos_)
+								for (const auto& g3 : cg3.gtos_) {
+									int qsum = g0.i_ + g1.i_ + g2.i_ + g3.i_;
+									qsum += g0.j_ + g1.j_ + g2.j_ + g3.j_;
+									qsum += g0.k_ + g1.k_ + g2.k_ + g3.k_;
 
-                                    std::vector<double> integral(qsum + 1, nan);
+									std::vector<double> integral(qsum + 1, nan);
 
-                                    double p = g0.a_ + g1.a_;
-                                    double q = g2.a_ + g3.a_;
-                                    double mu_ab = g0.a_ * g1.a_ / p;
-                                    double mu_cd = g2.a_ * g3.a_ / q;
+									double p = g0.a_ + g1.a_;
+									double q = g2.a_ + g3.a_;
+									double mu_ab = g0.a_ * g1.a_ / p;
+									double mu_cd = g2.a_ * g3.a_ / q;
 
-                                    double dist2_ab = (cg0.cx_ - cg1.cx_) * (cg0.cx_ - cg1.cx_)
-                                        + (cg0.cy_ - cg1.cy_) * (cg0.cy_ - cg1.cy_)
-                                        + (cg0.cz_ - cg1.cz_) * (cg0.cz_ - cg1.cz_);
+									double dist2_ab = (cg0.cx_ - cg1.cx_) * (cg0.cx_ - cg1.cx_)
+										+ (cg0.cy_ - cg1.cy_) * (cg0.cy_ - cg1.cy_)
+										+ (cg0.cz_ - cg1.cz_) * (cg0.cz_ - cg1.cz_);
 
-                                    double dist2_cd = (cg2.cx_ - cg3.cx_) * (cg2.cx_ - cg3.cx_)
-                                        + (cg2.cy_ - cg3.cy_) * (cg2.cy_ - cg3.cy_)
-                                        + (cg2.cz_ - cg3.cz_) * (cg2.cz_ - cg3.cz_);
+									double dist2_cd = (cg2.cx_ - cg3.cx_) * (cg2.cx_ - cg3.cx_)
+										+ (cg2.cy_ - cg3.cy_) * (cg2.cy_ - cg3.cy_)
+										+ (cg2.cz_ - cg3.cz_) * (cg2.cz_ - cg3.cz_);
 
-                                    double k_ab = std::exp(-mu_ab * dist2_ab);
-                                    double k_cd = std::exp(-mu_cd * dist2_cd);
+									double k_ab = std::exp(-mu_ab * dist2_ab);
+									double k_cd = std::exp(-mu_cd * dist2_cd);
 
-                                    double f
-                                        = 2 * std::pow(PI, 5.0 / 2.0) / (p * q * std::sqrt(p + q));
+									double f
+										= 2 * std::pow(PI, 5.0 / 2.0) / (p * q * std::sqrt(p + q));
 
-                                    const double px = (g0.a_ * cg0.cx_ + g1.a_ * cg1.cx_) / p;
-                                    const double py = (g0.a_ * cg0.cy_ + g1.a_ * cg1.cy_) / p;
-                                    const double pz = (g0.a_ * cg0.cz_ + g1.a_ * cg1.cz_) / p;
-                                    const double qx = (g2.a_ * cg2.cx_ + g3.a_ * cg3.cx_) / q;
-                                    const double qy = (g2.a_ * cg2.cy_ + g3.a_ * cg3.cy_) / q;
-                                    const double qz = (g2.a_ * cg2.cz_ + g3.a_ * cg3.cz_) / q;
+									const double px = (g0.a_ * cg0.cx_ + g1.a_ * cg1.cx_) / p;
+									const double py = (g0.a_ * cg0.cy_ + g1.a_ * cg1.cy_) / p;
+									const double pz = (g0.a_ * cg0.cz_ + g1.a_ * cg1.cz_) / p;
+									const double qx = (g2.a_ * cg2.cx_ + g3.a_ * cg3.cx_) / q;
+									const double qy = (g2.a_ * cg2.cy_ + g3.a_ * cg3.cy_) / q;
+									const double qz = (g2.a_ * cg2.cz_ + g3.a_ * cg3.cz_) / q;
 
-                                    const double dist2_pq = (px - qx) * (px - qx)
-                                        + (py - qy) * (py - qy) + (pz - qz) * (pz - qz);
+									const double dist2_pq = (px - qx) * (px - qx)
+										+ (py - qy) * (py - qy) + (pz - qz) * (pz - qz);
 
-                                    for (int n = 0; n <= qsum; n++)
-                                        integral[n]
-                                            = f * k_ab * k_cd * boys(n, p * q * dist2_pq / (p + q));
+									for (int n = 0; n <= qsum; n++)
+										integral[n]
+										= f * k_ab * k_cd * boys(n, p * q * dist2_pq / (p + q));
 
-                                    integral = calcSingleRepulsionIntegral(integral,
-                                        { g0.i_, g1.i_, g2.i_, g3.i_ },
-                                        { g0.a_, g1.a_, g2.a_, g3.a_ },
-                                        { cg0.cx_, cg1.cx_, cg2.cx_, cg3.cx_ });
+									integral = calcSingleRepulsionIntegral(integral,
+										{ g0.i_, g1.i_, g2.i_, g3.i_ },
+										{ g0.a_, g1.a_, g2.a_, g3.a_ },
+										{ cg0.cx_, cg1.cx_, cg2.cx_, cg3.cx_ });
 
-                                    integral = calcSingleRepulsionIntegral(integral,
-                                        { g0.j_, g1.j_, g2.j_, g3.j_ },
-                                        { g0.a_, g1.a_, g2.a_, g3.a_ },
-                                        { cg0.cy_, cg1.cy_, cg2.cy_, cg3.cy_ });
+									integral = calcSingleRepulsionIntegral(integral,
+										{ g0.j_, g1.j_, g2.j_, g3.j_ },
+										{ g0.a_, g1.a_, g2.a_, g3.a_ },
+										{ cg0.cy_, cg1.cy_, cg2.cy_, cg3.cy_ });
 
-                                    integral = calcSingleRepulsionIntegral(integral,
-                                        { g0.k_, g1.k_, g2.k_, g3.k_ },
-                                        { g0.a_, g1.a_, g2.a_, g3.a_ },
-                                        { cg0.cz_, cg1.cz_, cg2.cz_, cg3.cz_ });
+									integral = calcSingleRepulsionIntegral(integral,
+										{ g0.k_, g1.k_, g2.k_, g3.k_ },
+										{ g0.a_, g1.a_, g2.a_, g3.a_ },
+										{ cg0.cz_, cg1.cz_, cg2.cz_, cg3.cz_ });
 
-                                    sum += g0.c_ * g1.c_ * g2.c_ * g3.c_ * integral[0];
-                                }
+									assert(integral.size() == 1);
 
-                    assert(!std::isnan(sum));
-                    integrals[r][s][t][u] = sum;
-                }
+									sum += g0.c_ * g1.c_ * g2.c_ * g3.c_ * integral[0];
+								}
 
-    return integrals;
+					assert(!std::isnan(sum));
+
+#pragma omp critical
+					integrals[r][s][t][u] = sum;
+				}
+
+	return integrals;
 }
 
 hf::Matrix hf::HFSolver::calcElectronRepulsion(
-    const hf::Repulsions& integrals, const Matrix& density)
+	const hf::Repulsions& integrals, const Matrix& density)
 {
-    hf::Matrix repulsion(m_basisSize, m_basisSize);
-    for (unsigned int r = 0; r < m_basisSize; r++)
-        for (unsigned int s = 0; s < m_basisSize; s++) {
+	hf::Matrix repulsion(m_basisSize, m_basisSize);
+	for (int r = 0; r < m_basisSize; r++)
+		for (int s = 0; s < m_basisSize; s++) {
 
-            double sum = 0.0;
+			double sum = 0.0;
 
-            for (unsigned int t = 0; t < m_basisSize; t++)
-                for (unsigned int u = 0; u < m_basisSize; u++)
-                    sum += density(t, u) * (integrals[r][s][t][u] - 0.5 * integrals[r][u][t][s]);
+			for (int t = 0; t < m_basisSize; t++)
+				for (int u = 0; u < m_basisSize; u++)
+					sum += density(t, u) * (integrals[r][s][t][u] - 0.5 * integrals[r][u][t][s]);
 
-            repulsion(r, s) = sum;
-            assert(!std::isnan(sum));
-        }
+			repulsion(r, s) = sum;
+			assert(!std::isnan(sum));
+		}
 
-    return repulsion;
+	return repulsion;
 }
 
 double hf::HFSolver::solve(double tolerance)
 {
-    auto overlap = calcOverlap();
-    auto kinEnergy = calcKineticEnergy();
+	auto overlap = calcOverlap();
+	std::cout << "OVERLAP:\n" << overlap << '\n';
+	auto kinEnergy = calcKineticEnergy();
 
-    std::vector<Matrix> potentials(m_nuclei.size());
-    for (unsigned int i = 0; i < potentials.size(); i++)
-        potentials[i] = calcPotential(i);
+	std::vector<Matrix> potentials(m_nuclei.size());
+	for (int i = 0; i < static_cast<int>(potentials.size()); i++)
+		potentials[i] = calcPotential(i);
 
-    Matrix hcore = kinEnergy;
-    for (const auto& potential : potentials)
-        hcore -= potential;
+	Matrix hcore = kinEnergy;
+	for (const auto& potential : potentials)
+		hcore -= potential;
 
-    // Matrix density = guessInitialDensity(hcore);
-    Matrix density(m_basisSize, m_basisSize);
-    density.setZero(); // Hcore initial guess.
+	// Matrix density = guessInitialDensity(hcore);
+	Matrix density(m_basisSize, m_basisSize);
+	density.setZero(); // Hcore initial guess.
 
-    // Diagonalize overlap
-    Eigen::SelfAdjointEigenSolver<Matrix> solver(overlap, Eigen::ComputeEigenvectors);
-    Matrix D = solver.eigenvalues().asDiagonal();
-    Matrix P = solver.eigenvectors();
+	// Diagonalize overlap
+	Eigen::SelfAdjointEigenSolver<Matrix> solver(overlap, Eigen::ComputeEigenvectors);
+	Matrix D = solver.eigenvalues().asDiagonal();
+	Matrix P = solver.eigenvectors();
 
-    for (unsigned int i = 0; i < m_basisSize; i++)
-        D(i, i) = 1.0 / std::sqrt(std::abs(D(i, i)));
+	for (int i = 0; i < m_basisSize; i++)
+		D(i, i) = 1.0 / std::sqrt(std::abs(D(i, i)));
 
-    Matrix overlap_inv = P * D * P.inverse();
+	Matrix overlap_inv = P * D * P.inverse();
+	std::cout << "OVERLAP_INV:\n" << overlap_inv << '\n';
 
-    auto repulsionIntegrals = calcRepulsionIntegrals();
+	auto repulsionIntegrals = calcRepulsionIntegrals();
 
-    double maxDelta;
-    unsigned int i = 0;
-    do {
-        i++;
+	double maxDelta;
+	int iterations = 0;
 
-        auto repulsions = calcElectronRepulsion(repulsionIntegrals, density);
+	Matrix prevFock = calcElectronRepulsion(repulsionIntegrals, density) + hcore;
 
-        Matrix fockOperator = repulsions + hcore;
+	do {
 
-        fockOperator = overlap_inv * fockOperator * overlap_inv;
+		std::cout << "ITERATION " << iterations << ":\n";
 
-        solver.compute(fockOperator);
+		auto repulsions = calcElectronRepulsion(repulsionIntegrals, density);
 
-        m_coeff = overlap_inv * solver.eigenvectors();
+		std::cout << "REPULSIONS:\n" << repulsions << '\n';
 
-        // Update density matrix.
-        auto prevDensity = density;
-        density = 0.8 * calcDensity(m_coeff) + 0.2 * prevDensity;
-        maxDelta = (prevDensity - density).cwiseAbs().maxCoeff();
+		Matrix fockOperator = 0.5 * (repulsions + hcore) + 0.5 * prevFock;
 
-    } while (maxDelta > tolerance and i < 70);
+		prevFock = fockOperator;
 
-    if (i >= 70)
-        std::cout << "CALCULATION DID NOT CONVERGE!\n";
+		fockOperator = overlap_inv * fockOperator * overlap_inv;
 
-    double HFEnergy = 0;
-    for (unsigned int i = 0; i < m_occupied; i++)
-        HFEnergy += solver.eigenvalues()(i);
 
-    std::cout << "E-Levels:\n" << solver.eigenvalues() << '\n';
+		solver.compute(fockOperator);
 
-    for (unsigned int r = 0; r < m_basisSize; r++)
-        for (unsigned int s = 0; s < m_basisSize; s++)
-            HFEnergy += 0.5 * density(r, s) * hcore(r, s);
+		m_coeff = overlap_inv * solver.eigenvectors();
 
-    std::cout << "HF-Energy = " << HFEnergy << '\n';
+		std::cout << "ENERGIES:\n";
+		for (int i = 0; i < m_occupied; i++)
+			std::cout << solver.eigenvalues()(i) << '\n';
+		std::cout << '\n';
 
-    // Inter-nuclear repulsion energy
-    double INREnergy = 0;
-    for (unsigned int i = 0; i < m_nuclei.size(); i++)
-        for (unsigned int j = i + 1; j < m_nuclei.size(); j++) {
-            const auto& nuc0 = m_nuclei[i];
-            const auto& nuc1 = m_nuclei[j];
+		// Update density matrix.
+		auto prevDensity = density;
+		density = 0.8 * calcDensity(m_coeff) + 0.2 * prevDensity;
+		maxDelta = (prevDensity - density).cwiseAbs().maxCoeff();
 
-            INREnergy += nuc0.charge * nuc1.charge
-                / std::sqrt((nuc0.x - nuc1.x) * (nuc0.x - nuc1.x)
-                    + (nuc0.y - nuc1.y) * (nuc0.y - nuc1.y)
-                    + (nuc0.z - nuc1.z) * (nuc0.z - nuc1.z));
-        }
-    std::cout << "INR-Energy = " << INREnergy << '\n';
-    std::cout << "Total energy = " << HFEnergy + INREnergy << '\n';
+		iterations++;
+	} while (maxDelta > tolerance && iterations < 100);
 
-    return HFEnergy + INREnergy;
+	if (iterations >= 100)
+		std::cout << "CALCULATION DID NOT CONVERGE!\n";
+	else
+		std::cout << "CALCULATION DID CONVERGE!\n";
+
+	double HFEnergy = 0;
+	for (int i = 0; i < m_occupied; i++)
+		HFEnergy += solver.eigenvalues()(i);
+
+	std::cout << "E-Levels:\n" << solver.eigenvalues() << '\n';
+
+	for (int r = 0; r < m_basisSize; r++)
+		for (int s = 0; s < m_basisSize; s++)
+			HFEnergy += 0.5 * density(r, s) * hcore(r, s);
+
+	std::cout << "HF-Energy = " << HFEnergy << '\n';
+
+	// Inter-nuclear repulsion energy
+	double INREnergy = 0;
+	for (unsigned int i = 0; i < m_nuclei.size(); i++)
+		for (unsigned int j = i + 1; j < m_nuclei.size(); j++) {
+			const auto& nuc0 = m_nuclei[i];
+			const auto& nuc1 = m_nuclei[j];
+
+			INREnergy += static_cast<double>(nuc0.charge) * static_cast<double>(nuc1.charge)
+				/ std::sqrt((nuc0.x - nuc1.x) * (nuc0.x - nuc1.x)
+					+ (nuc0.y - nuc1.y) * (nuc0.y - nuc1.y)
+					+ (nuc0.z - nuc1.z) * (nuc0.z - nuc1.z));
+		}
+	std::cout << "INR-Energy = " << INREnergy << '\n';
+	std::cout << "Total energy = " << HFEnergy + INREnergy << '\n';
+
+	return HFEnergy + INREnergy;
 }
 
-double hf::HFSolver::orbital(double x, double y, double z, unsigned int n) const
+double hf::HFSolver::orbital(double x, double y, double z, size_t n) const
 {
-    assert(n <= m_basisSize);
+	assert(n <= m_basisSize);
 
-    double sum = 0;
-    for (unsigned int i = 0; i < m_basisSize; i++)
-        sum += m_coeff(i, n) * m_basis[i](x, y, z);
+	double sum = 0;
+	for (int i = 0; i < m_basisSize; i++)
+		sum += m_coeff(i, n) * m_basis[i](x, y, z);
 
-    return sum;
+	return sum;
 }

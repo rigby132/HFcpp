@@ -7,7 +7,6 @@
 
 #include <array>
 #include <cmath>
-#include <docopt/docopt_value.h>
 #include <functional>
 #include <iomanip>
 #include <iostream>
@@ -60,7 +59,7 @@ int main(int argc, const char** argv)
 
     if (app.count("--vdk") > 0){
         std::cout << "WRITING OUTPUT...\n";
-        hf::writeOrbitals<float>(solver, "out.vdk", 2, 120);
+        hf::writeOrbitals<double>(solver, "out.vdk", 2, 120);
     }
     return 0;
 }

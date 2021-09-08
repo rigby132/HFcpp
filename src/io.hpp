@@ -28,7 +28,7 @@
 
 namespace hf {
 
-const std::map<std::string, unsigned int> ATOMIC_CHARGES
+const std::map<std::string, int> ATOMIC_CHARGES
     = { { "H", 1 }, { "He", 2 }, { "HE", 2 }, { "Li", 3 }, { "LI", 3 }, { "Be", 4 }, { "BE", 4 },
           { "B", 5 }, { "C", 6 }, { "N", 7 }, { "O", 8 }, { "F", 9 } };
 
@@ -47,23 +47,24 @@ std::vector<Nucleus<FLOAT>> readStructureFromFile(const std::string& path)
     if (!fileStream.is_open())
         throw std::invalid_argument("Could not open file");
 
-    int size;
+    //TODO ERROR HANDLING
+    size_t size;
     fileStream >> size;
 
-    if (size < 1)
-        throw std::invalid_argument("Number of atoms must be at least 1.");
+    //if (size < 1)
+    //    throw std::invalid_argument("Number of atoms must be at least 1.");
 
     std::vector<Nucleus<FLOAT>> structure(size);
-    for (unsigned int i = 0; i < static_cast<unsigned int>(size); i++) {
+    for (size_t i = 0; i < size; i++) {
         std::string atom;
 
         FLOAT x, y, z;
-        unsigned int charge;
+        int charge;
         fileStream >> atom >> x >> y >> z;
 
         try {
             charge = ATOMIC_CHARGES.at(atom);
-        } catch (const std::out_of_range& e) {
+        } catch (const std::out_of_range&) {
             throw std::invalid_argument("Element in file is not known.");
         }
 
@@ -93,12 +94,12 @@ std::vector<CGTO<FLOAT>> readBasisFromFile(
         throw std::invalid_argument("Could not open file");
 
     // uint: element, pair: [uint: angular momentum, vector: coeff(first) & expo(second) pairs]
-    std::map<unsigned int,
-        std::vector<std::tuple<unsigned int, std::vector<FLOAT>, std::vector<FLOAT>>>>
+    std::map<size_t,
+        std::vector<std::tuple<int, std::vector<FLOAT>, std::vector<FLOAT>>>>
         basisSet;
 
     while (true) {
-        unsigned int element;
+        int element;
         std::string name;
         std::string skip;
         // Get second name and skip the orbital line
@@ -109,20 +110,20 @@ std::vector<CGTO<FLOAT>> readBasisFromFile(
 
         try {
             element = ATOMIC_CHARGES.at(name);
-        } catch (const std::out_of_range& e) {
+        } catch (const std::out_of_range&) {
             throw std::invalid_argument("Element in file is not known.");
         }
 
-        unsigned int size;
+        unsigned size;
         fileStream >> size;
-        for (unsigned int i = 0; i < size; i++) {
-            unsigned int index, momentum, pairs;
+        for (unsigned i = 0; i < size; i++) {
+            int index, momentum, pairs;
             fileStream >> index >> momentum >> pairs;
 
             std::vector<FLOAT> coeffs;
             std::vector<FLOAT> expos;
 
-            for (unsigned int j = 0; j < pairs; j++) {
+            for (int j = 0; j < pairs; j++) {
                 FLOAT coeff, expo;
                 fileStream >> expo >> coeff;
 
@@ -135,10 +136,10 @@ std::vector<CGTO<FLOAT>> readBasisFromFile(
 
     std::vector<CGTO<FLOAT>> basis;
     for (const auto& atom : structure) {
-        std::vector<std::tuple<unsigned int, std::vector<FLOAT>, std::vector<FLOAT>>> atomBasis;
+        std::vector<std::tuple<int, std::vector<FLOAT>, std::vector<FLOAT>>> atomBasis;
         try {
             atomBasis = basisSet.at(atom.charge);
-        } catch (const std::out_of_range& e) {
+        } catch (const std::out_of_range&) {
             throw std::invalid_argument("No basis for this atom available.");
         }
 
@@ -162,7 +163,7 @@ std::vector<CGTO<FLOAT>> readBasisFromFile(
 
 template <typename FLOAT = double>
 void writeOrbitals(
-    const HFSolver& solver, const std::string& path, const FLOAT space, const unsigned int points)
+    const HFSolver& solver, const std::string& path, const FLOAT space, const int points)
 {
     std::ofstream fileStream(path);
 
@@ -214,15 +215,15 @@ void writeOrbitals(
                << "POINT_DATA " << static_cast<int>(points * points * points) << '\n';
 
     // Add data set for each orbital.
-    for (unsigned int i = 0; i < solver.m_basisSize; i++) {
+    for ( int i = 0; i < solver.m_basisSize; i++) {
         fileStream << "SCALARS ro" << std::setfill('0') << std::setw(3) << i << std::setw(0)
                    << " float 1\n"
                    << "LOOKUP_TABLE default\n";
 
         // Fill in data.
-        for (unsigned int x = 0; x < points; x++)
-            for (unsigned int y = 0; y < points; y++)
-                for (unsigned int z = 0; z < points; z++) {
+        for ( int x = 0; x < points; x++)
+            for (int y = 0; y < points; y++)
+                for (int z = 0; z < points; z++) {
                     FLOAT ro = solver.orbital(spaceX * x + minX - space, spaceY * y + minY - space,
                         spaceZ * z + minZ - space, i);
 

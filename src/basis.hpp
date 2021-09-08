@@ -37,7 +37,7 @@ enum ANGULAR_MOMENTUM {
  */
 template <typename T = double> struct Nucleus {
     T x, y, z;
-    unsigned int charge;
+    int charge;
 };
 
 /**
@@ -65,7 +65,7 @@ public:
      *
      * @return The GTO value at the specified point.
      */
-    FLOAT operator()(FLOAT xA, FLOAT yA, FLOAT zA) const
+    inline FLOAT operator()(FLOAT xA, FLOAT yA, FLOAT zA) const
     {
         FLOAT pow = 1;
         for (int i = 0; i < i_; i++)
@@ -112,9 +112,6 @@ public:
         }())
     {
         assert(coefficients.size() == exponents.size());
-        assert(i >= 0);
-        assert(j >= 0);
-        assert(k >= 0);
         static_assert(std::is_floating_point_v<FLOAT>, "CGTO type must use a floating point type!");
     }
 
@@ -127,7 +124,7 @@ public:
      *
      * @return The CGTO value at the specified point.
      */
-    FLOAT operator()(FLOAT x, FLOAT y, FLOAT z) const
+    inline FLOAT operator()(FLOAT x, FLOAT y, FLOAT z) const
     {
         FLOAT sum = 0;
         for (const GTO<FLOAT>& gto : gtos_)

@@ -37,7 +37,7 @@ enum ANGULAR_MOMENTUM {
  */
 template <typename T = double> struct Nucleus {
     T x, y, z;
-    unsigned int charge;
+    size_t charge;
 };
 
 /**
@@ -53,7 +53,7 @@ public:
 
     /** @brief The orbital angular momentum for each primitive GTO.
      */
-    const int i_, j_, k_;
+    const size_t i_, j_, k_;
 
 public:
     /**
@@ -86,7 +86,7 @@ public:
     /** @brief The coordinates at which this Orbital is located at.
      */
     const FLOAT cx_, cy_, cz_;
-    const int i_, j_, k_;
+    const size_t i_, j_, k_;
     const size_t size_;
 
     /** @brief A list of GTOs for each dimension.
@@ -95,7 +95,7 @@ public:
 
 public:
     CGTO(FLOAT centerX, FLOAT centerY, FLOAT centerZ, std::vector<FLOAT> coefficients,
-        std::vector<FLOAT> exponents, int i, int j, int k)
+        std::vector<FLOAT> exponents, size_t i, size_t j, size_t k)
         : cx_(centerX)
         , cy_(centerY)
         , cz_(centerZ)
@@ -112,9 +112,6 @@ public:
         }())
     {
         assert(coefficients.size() == exponents.size());
-        assert(i >= 0);
-        assert(j >= 0);
-        assert(k >= 0);
         static_assert(std::is_floating_point_v<FLOAT>, "CGTO type must use a floating point type!");
     }
 

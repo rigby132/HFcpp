@@ -40,10 +40,10 @@ template <typename FLOAT = double> FLOAT boys(const int n, const FLOAT x)
     // TODO replace bad approximation with a good one!
     FLOAT f0 = 0;
     for (unsigned int k = 0; k <= 6; k++)
-        f0 += std::pow(-x, k) / (std::tgamma(k + 1) * (2 * n + 2 * k + 1));
+        f0 += std::pow(-x, k) / (std::tgamma(k + 1) * (2.0 * n + 2.0 * k + 1.0));
 
-    int semiFactorial = 1;
-    for (int i = 2 * n - 1; i > 0; i -= 2)
+    long long semiFactorial = 1;
+    for (int i = n; i > 0; i -= 2)
         semiFactorial *= i;
 
     FLOAT f1 = std::sqrt(pi / std::pow(x, 2 * n + 1)) * semiFactorial / std::pow(2, n + 1);

@@ -13,10 +13,10 @@
 
 #include "basis.hpp"
 
-#include <Eigen/Dense>
+#include "Eigen/Dense"
 
-#include <Eigen/src/Core/Matrix.h>
-#include <Eigen/src/Core/util/Constants.h>
+#include "Eigen/src/Core/Matrix.h"
+#include "Eigen/src/Core/util/Constants.h"
 #include <array>
 #include <cstddef>
 #include <functional>
@@ -47,7 +47,7 @@ public:
      * @param occupied_orbitals Number of fully occupied orbitals, starting from lowest one.
      */
     HFSolver(const std::vector<CGTO<double>>& basis, const std::vector<Nucleus<>>& nuclei,
-        const unsigned int occupied_orbitals);
+        const size_t occupied_orbitals);
 
     /**
      * @brief Does the complete Hartree-Fock calculation on the provided structure.
@@ -68,7 +68,7 @@ public:
      * @param level The index of the orbital in order of the calculated energy levels.
      * @return The value at the specified point of the orbial.
      */
-    double orbital(double x, double y, double z, unsigned int level) const;
+    double orbital(double x, double y, double z, size_t level) const;
 
 public:
     const std::vector<CGTO<double>> m_basis;
@@ -76,14 +76,14 @@ public:
     /**
      * @brief Number of basis functions used.
      */
-    const unsigned int m_basisSize;
+    const size_t m_basisSize;
 
     const std::vector<Nucleus<>> m_nuclei;
     /**
      * @brief Number of occupied orbitals starting from the lowest energy one.
      *
      */
-    const unsigned int m_occupied;
+    const size_t m_occupied;
 
 private:
     Matrix m_coeff;

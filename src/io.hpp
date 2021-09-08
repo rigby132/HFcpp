@@ -99,7 +99,7 @@ std::vector<CGTO<FLOAT>> readBasisFromFile(
         basisSet;
 
     while (true) {
-        int element;
+        size_t element;
         std::string name;
         std::string skip;
         // Get second name and skip the orbital line
@@ -114,16 +114,16 @@ std::vector<CGTO<FLOAT>> readBasisFromFile(
             throw std::invalid_argument("Element in file is not known.");
         }
 
-        unsigned size;
+        unsigned int size;
         fileStream >> size;
-        for (unsigned i = 0; i < size; i++) {
+        for (size_t i = 0; i < size; i++) {
             int index, momentum, pairs;
             fileStream >> index >> momentum >> pairs;
 
             std::vector<FLOAT> coeffs;
             std::vector<FLOAT> expos;
 
-            for (int j = 0; j < pairs; j++) {
+            for (size_t j = 0; j < pairs; j++) {
                 FLOAT coeff, expo;
                 fileStream >> expo >> coeff;
 
@@ -163,7 +163,7 @@ std::vector<CGTO<FLOAT>> readBasisFromFile(
 
 template <typename FLOAT = double>
 void writeOrbitals(
-    const HFSolver& solver, const std::string& path, const FLOAT space, const int points)
+    const HFSolver& solver, const std::string& path, const FLOAT space, const unsigned int points)
 {
     std::ofstream fileStream(path);
 
@@ -215,15 +215,15 @@ void writeOrbitals(
                << "POINT_DATA " << static_cast<int>(points * points * points) << '\n';
 
     // Add data set for each orbital.
-    for ( int i = 0; i < solver.m_basisSize; i++) {
+    for ( size_t i = 0; i < solver.m_basisSize; i++) {
         fileStream << "SCALARS ro" << std::setfill('0') << std::setw(3) << i << std::setw(0)
                    << " float 1\n"
                    << "LOOKUP_TABLE default\n";
 
         // Fill in data.
-        for ( int x = 0; x < points; x++)
-            for (int y = 0; y < points; y++)
-                for (int z = 0; z < points; z++) {
+        for ( size_t x = 0; x < points; x++)
+            for (size_t y = 0; y < points; y++)
+                for (size_t z = 0; z < points; z++) {
                     FLOAT ro = solver.orbital(spaceX * x + minX - space, spaceY * y + minY - space,
                         spaceZ * z + minZ - space, i);
 

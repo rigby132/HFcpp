@@ -575,14 +575,14 @@ double hf::HFSolver::solve(double tolerance)
 
 		std::cout << "REPULSIONS:\n" << repulsions << '\n';
 
-		Matrix fockOperator = 0.5 * (repulsions + hcore) + 0.5 * prevFock;
+		Matrix fockEnergy = 0.5 * (repulsions + hcore) + 0.5 * prevFock;
 
-		prevFock = fockOperator;
+		prevFock = fockEnergy;
 
-		fockOperator = overlap_inv * fockOperator * overlap_inv;
+		fockEnergy = overlap_inv * fockEnergy * overlap_inv;
 
 
-		solver.compute(fockOperator);
+		solver.compute(fockEnergy);
 
 		m_coeff = overlap_inv * solver.eigenvectors();
 

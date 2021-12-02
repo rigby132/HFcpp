@@ -5,4 +5,4 @@ src/compile_commands.json
 src/.clangd
 dep/
 .vscode/
-src/hfcpp.code-workspace
+hfcpp.code-workspace

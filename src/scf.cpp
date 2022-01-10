@@ -620,11 +620,7 @@ double hf::HFSolver::solve(double tolerance)
 
         auto repulsions = calcElectronRepulsion(repulsionIntegrals, density);
 
-<<<<<<< HEAD
         // std::cout << "REPULSIONS:\n" << repulsions << '\n';
-=======
-		solver.compute(fockEnergy);
->>>>>>> a50fdc819e5860189993183deea75c30ea9d262c
 
         Matrix fockOperator = repulsions + hcore;
 

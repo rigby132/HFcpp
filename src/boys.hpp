@@ -108,7 +108,7 @@ constexpr std::array<double, 195> BOYS_20_VALUES { 0.02439024390243902524, 0.022
     0.00000000046406418353 };
 
 /**
- * @brief Precomputed values from 0 to 19.4 in 0.1 steps of the boys function order 20.
+ * @brief Precomputed values from 0 to 19.4 in 0.1 steps of the boys function order 40.
  */
 constexpr std::array<double, 195> BOYS_40_VALUES { 0.01234567901234568006, 0.01119781347129320155,
     0.01015672959462047761, 0.00921248886172740603, 0.00835607820981053122, 0.00757932381697180076,

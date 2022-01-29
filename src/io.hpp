@@ -4,9 +4,9 @@
  * @brief Defines functions for input and output.
  * @version 0.1
  * @date 2021-07-11
- * 
+ *
  * @copyright Copyright (c) 2021
- * 
+ *
  */
 
 #pragma once
@@ -47,11 +47,11 @@ std::vector<Nucleus<FLOAT>> readStructureFromFile(const std::string& path)
     if (!fileStream.is_open())
         throw std::invalid_argument("Could not open file");
 
-    //TODO ERROR HANDLING
+    // TODO ERROR HANDLING
     size_t size;
     fileStream >> size;
 
-    //if (size < 1)
+    // if (size < 1)
     //    throw std::invalid_argument("Number of atoms must be at least 1.");
 
     std::vector<Nucleus<FLOAT>> structure(size);
@@ -94,9 +94,7 @@ std::vector<CGTO<FLOAT>> readBasisFromFile(
         throw std::invalid_argument("Could not open file");
 
     // uint: element, pair: [uint: angular momentum, vector: coeff(first) & expo(second) pairs]
-    std::map<size_t,
-        std::vector<std::tuple<int, std::vector<FLOAT>, std::vector<FLOAT>>>>
-        basisSet;
+    std::map<size_t, std::vector<std::tuple<int, std::vector<FLOAT>, std::vector<FLOAT>>>> basisSet;
 
     while (true) {
         int element;
@@ -162,7 +160,7 @@ std::vector<CGTO<FLOAT>> readBasisFromFile(
 }
 
 template <typename FLOAT = double>
-void writeOrbitals(
+void writeOrbitalsVDK(
     const HFSolver& solver, const std::string& path, const FLOAT space, const int points)
 {
     std::ofstream fileStream(path);
@@ -215,13 +213,13 @@ void writeOrbitals(
                << "POINT_DATA " << static_cast<int>(points * points * points) << '\n';
 
     // Add data set for each orbital.
-    for ( int i = 0; i < solver.m_basisSize; i++) {
+    for (int i = 0; i < solver.m_basisSize; i++) {
         fileStream << "SCALARS ro" << std::setfill('0') << std::setw(3) << i << std::setw(0)
                    << " float 1\n"
                    << "LOOKUP_TABLE default\n";
 
         // Fill in data.
-        for ( int x = 0; x < points; x++)
+        for (int x = 0; x < points; x++)
             for (int y = 0; y < points; y++)
                 for (int z = 0; z < points; z++) {
                     FLOAT ro = solver.orbital(spaceX * x + minX - space, spaceY * y + minY - space,
@@ -231,6 +229,88 @@ void writeOrbitals(
                 }
         fileStream << '\n';
     }
+}
+
+template <typename FLOAT = double>
+void writeOrbitalsCUBE(
+    const HFSolver& solver, const std::string& path, const FLOAT space, const FLOAT spacing)
+{
+    std::ofstream fileStream(path);
+
+    if (!fileStream.is_open())
+        throw std::invalid_argument("Could not open file");
+
+    // Standard comments in header.
+    fileStream << "CPMD CUBE FILE.\n"
+               << "OUTER LOOP: X, MIDDLE LOOP: Y, INNER LOOP: Z\n";
+
+    FLOAT minX = 0;
+    FLOAT minY = 0;
+    FLOAT minZ = 0;
+    FLOAT maxX = 0;
+    FLOAT maxY = 0;
+    FLOAT maxZ = 0;
+
+    // x coordinate.
+    for (const auto& nuc : solver.m_nuclei) {
+        if (nuc.x < minX)
+            minX = nuc.x;
+        if (nuc.x > maxX)
+            maxX = nuc.x;
+    }
+    // y coordinate.
+    for (const auto& nuc : solver.m_nuclei) {
+        if (nuc.y < minY)
+            minY = nuc.y;
+        if (nuc.y > maxY)
+            maxY = nuc.y;
+    }
+    // z coordinate.
+    for (const auto& nuc : solver.m_nuclei) {
+        if (nuc.z < minZ)
+            minZ = nuc.z;
+        if (nuc.z > maxZ)
+            maxZ = nuc.z;
+    }
+
+    int pointsX = 1 + (maxX - minX + space * 2) / spacing;
+    int pointsY = 1 + (maxY - minY + space * 2) / spacing;
+    int pointsZ = 1 + (maxZ - minZ + space * 2) / spacing;
+
+    // Add number of atoms, origin and spacing info.
+    fileStream << '-'<< solver.m_nuclei.size() << ' ' << minX - space << ' ' << minY - space << ' '
+               << minZ - space << '\n'
+               << -pointsX << ' ' << spacing << ' ' << 0 << ' ' << 0 << '\n'
+               << -pointsY << ' ' << 0 << ' ' << spacing << ' ' << 0 << '\n'
+               << -pointsZ << ' ' << 0 << ' ' << 0 << ' ' << spacing << '\n';
+
+    // Add nuclei and their positions.
+    for (auto nucleus : solver.m_nuclei)
+        fileStream << nucleus.charge << ' ' << 0 << ' ' << nucleus.x << ' ' << nucleus.y << ' '
+                   << nucleus.z << '\n';
+
+    // Add Orbital indexing
+    fileStream << solver.m_basisSize << '\n';
+    for(int i = 0; i < solver.m_basisSize; i++)
+        fileStream << i << '\n';
+
+    // Add data set for each orbital.
+    for (int x = 0; x < pointsX; x++)
+        for (int y = 0; y < pointsY; y++) {
+            for (int z = 0; z < pointsZ; z++)
+                for (int i = 0; i < solver.m_basisSize; i++) {
+                    FLOAT ro = solver.orbital(spacing * x + minX - space,
+                        spacing * y + minY - space, spacing * z + minZ - space, i);
+
+                    fileStream << ro*ro;
+
+                    if ((z * solver.m_basisSize + i) % 6 == 5)
+                        fileStream << '\n';
+                    else
+                        fileStream << ' ';
+                }
+            fileStream << '\n';
+        }
 }
 
 }

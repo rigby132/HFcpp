@@ -568,7 +568,7 @@ double hf::HFSolver::solve(double tolerance)
     // Find first problematic index starting from greatest eigenvalue.
     int valuesToRemove = 0;
     for (int i = 0; i < m_basisSize; i++)
-        if (D(i, i) < 10e-3)
+        if (D(i, i) < 10e-4)
             valuesToRemove++;
     std::cout << valuesToRemove << " basis functions were removed for numerical stability.\n";
 

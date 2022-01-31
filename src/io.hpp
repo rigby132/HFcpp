@@ -232,8 +232,8 @@ void writeOrbitalsVDK(
 }
 
 template <typename FLOAT = double>
-void writeOrbitalsCUBE(
-    const HFSolver& solver, const std::string& path, const FLOAT space, const FLOAT spacing)
+void writeOrbitalsCUBE(const HFSolver& solver, const std::string& path, const FLOAT space,
+    const FLOAT spacing, const bool exportDensity)
 {
     std::ofstream fileStream(path);
 
@@ -278,7 +278,7 @@ void writeOrbitalsCUBE(
     int pointsZ = 1 + (maxZ - minZ + space * 2) / spacing;
 
     // Add number of atoms, origin and spacing info.
-    fileStream << '-'<< solver.m_nuclei.size() << ' ' << minX - space << ' ' << minY - space << ' '
+    fileStream << '-' << solver.m_nuclei.size() << ' ' << minX - space << ' ' << minY - space << ' '
                << minZ - space << '\n'
                << -pointsX << ' ' << spacing << ' ' << 0 << ' ' << 0 << '\n'
                << -pointsY << ' ' << 0 << ' ' << spacing << ' ' << 0 << '\n'
@@ -291,26 +291,44 @@ void writeOrbitalsCUBE(
 
     // Add Orbital indexing
     fileStream << solver.m_basisSize << '\n';
-    for(int i = 0; i < solver.m_basisSize; i++)
+    for (int i = 0; i < solver.m_basisSize; i++)
         fileStream << i << '\n';
 
     // Add data set for each orbital.
-    for (int x = 0; x < pointsX; x++)
-        for (int y = 0; y < pointsY; y++) {
-            for (int z = 0; z < pointsZ; z++)
-                for (int i = 0; i < solver.m_basisSize; i++) {
-                    FLOAT ro = solver.orbital(spacing * x + minX - space,
-                        spacing * y + minY - space, spacing * z + minZ - space, i);
+    if (exportDensity)
+        for (int x = 0; x < pointsX; x++)
+            for (int y = 0; y < pointsY; y++) {
+                for (int z = 0; z < pointsZ; z++)
+                    for (int i = 0; i < solver.m_basisSize; i++) {
+                        FLOAT ro = solver.orbital(spacing * x + minX - space,
+                            spacing * y + minY - space, spacing * z + minZ - space, i);
 
-                    fileStream << ro*ro;
+                        fileStream << ro * ro;
 
-                    if ((z * solver.m_basisSize + i) % 6 == 5)
-                        fileStream << '\n';
-                    else
-                        fileStream << ' ';
-                }
-            fileStream << '\n';
-        }
+                        if ((z * solver.m_basisSize + i) % 6 == 5)
+                            fileStream << '\n';
+                        else
+                            fileStream << ' ';
+                    }
+                fileStream << '\n';
+            }
+    else
+        for (int x = 0; x < pointsX; x++)
+            for (int y = 0; y < pointsY; y++) {
+                for (int z = 0; z < pointsZ; z++)
+                    for (int i = 0; i < solver.m_basisSize; i++) {
+                        FLOAT ro = solver.orbital(spacing * x + minX - space,
+                            spacing * y + minY - space, spacing * z + minZ - space, i);
+
+                        fileStream << ro;
+
+                        if ((z * solver.m_basisSize + i) % 6 == 5)
+                            fileStream << '\n';
+                        else
+                            fileStream << ' ';
+                    }
+                fileStream << '\n';
+            }
 }
 
 }

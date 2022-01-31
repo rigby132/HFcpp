@@ -41,7 +41,9 @@ int main(int argc, const char** argv)
 
     app.add_flag("--vdk", "Output orbital densities as a .vdk file.");
 
-    app.add_flag("--cube", "Output orbital densities as a .cube file.");
+    app.add_flag("--cube", "Output orbital data (wavefunction unless specified otherwise) as a .cube file.");
+
+    app.add_flag("--density", "Output orbital data as densities.");
 
     try {
         app.parse(argc, argv);
@@ -66,7 +68,10 @@ int main(int argc, const char** argv)
 
     if (app.count("--cube") > 0){
         std::cout << "WRITING CUBE OUTPUT...\n";
-        hf::writeOrbitalsCUBE<double>(solver, "out.cube", 2, 0.1);
+        if(app.count("--density") > 0)
+            hf::writeOrbitalsCUBE<double>(solver, "density.cube", 2, 0.1, true);
+        else
+            hf::writeOrbitalsCUBE<double>(solver, "wave.cube", 2, 0.1, false);
     }
 
     return 0;

@@ -564,11 +564,11 @@ double hf::HFSolver::solve(double tolerance)
     Matrix D = solver.eigenvalues().asDiagonal();
     Matrix P = solver.eigenvectors();
 
-    // Remove eigenvalues smaller than 10e-4 (they cause numerical problems).
+    // Remove eigenvalues smaller than 10e-5 (they cause numerical problems).
     // Find first problematic index starting from greatest eigenvalue.
     int valuesToRemove = 0;
     for (int i = 0; i < m_basisSize; i++)
-        if (D(i, i) < 10e-4)
+        if (D(i, i) < 10e-5)
             valuesToRemove++;
     std::cout << valuesToRemove << " basis functions were removed for numerical stability.\n";
 

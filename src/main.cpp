@@ -39,6 +39,18 @@ int main(int argc, const char** argv)
         ->default_val(0.00001)
         ->check(CLI::PositiveNumber);
 
+    double buffer;
+    app.add_option(
+           "--buffer", buffer, "The extra space around the nuclei to include in the outputs.")
+        ->default_val(2.0)
+        ->check(CLI::PositiveNumber);
+
+    double spacing;
+    app.add_option(
+           "--space", spacing, "The size of each volume element in the output file.")
+        ->default_val(0.1)
+        ->check(CLI::PositiveNumber);
+
     app.add_flag("--vdk", "Output orbital densities as a .vdk file.");
 
     app.add_flag("--cube", "Output orbital data (wavefunction unless specified otherwise) as a .cube file.");
@@ -63,15 +75,15 @@ int main(int argc, const char** argv)
 
     if (app.count("--vdk") > 0){
         std::cout << "WRITING VDK OUTPUT...\n";
-        hf::writeOrbitalsVDK<double>(solver, "out.vdk", 2, 120);
+        hf::writeOrbitalsVDK<double>(solver, "out.vdk", buffer, 120);
     }
 
     if (app.count("--cube") > 0){
         std::cout << "WRITING CUBE OUTPUT...\n";
         if(app.count("--density") > 0)
-            hf::writeOrbitalsCUBE<double>(solver, "density.cube", 2, 0.1, true);
+            hf::writeOrbitalsCUBE<double>(solver, "density.cube", buffer, spacing, true);
         else
-            hf::writeOrbitalsCUBE<double>(solver, "wave.cube", 2, 0.1, false);
+            hf::writeOrbitalsCUBE<double>(solver, "wave.cube", buffer, spacing, false);
     }
 
     return 0;

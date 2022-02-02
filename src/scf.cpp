@@ -590,10 +590,10 @@ double hf::HFSolver::solve(double tolerance)
         for (int j = valuesToRemove; j < m_basisSize; j++)
             Ptrunc(i, j - valuesToRemove) = P(i, j);
 
-    std::cout << "Overlap eigenvalues: \n";
-    for (int i = 0; i < m_basisSize; i++)
-        std::cout << D(i, i) << '\n';
-    std::cout << '\n';
+    //std::cout << "Overlap eigenvalues: \n";
+    //for (int i = 0; i < m_basisSize; i++)
+    //    std::cout << D(i, i) << '\n';
+    //std::cout << '\n';
 
     //std::cout << "Truncated overlap matrices:\n" << Dtrunc << "\n\n" << Ptrunc;
     // Use truncated matrices from now on. 

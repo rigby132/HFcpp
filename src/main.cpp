@@ -53,13 +53,11 @@ int main(int argc, const char** argv)
 
     std::string outputDensityName;
     app.add_option(
-           "-d,--density", outputDensityName, "Output orbital densities as a .cube file.")
-        ->default_val("density.cube");
+           "-d,--density", outputDensityName, "Output orbital densities as a .cube file.");
 
     std::string outputWaveName;
     app.add_option(
-           "-w,--wave", outputWaveName, "Output orbital wavefunctions as a .cube file.Name of the output file for orbital data.")
-        ->default_val("wave.cube");
+           "-w,--wave", outputWaveName, "Output orbital wavefunctions as a .cube file.");
 
     try {
         app.parse(argc, argv);

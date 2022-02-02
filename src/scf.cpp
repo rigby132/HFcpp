@@ -285,11 +285,13 @@ hf::Matrix hf::HFSolver::calcPotential(int i)
                     potentials = calcPotentialIntegral(
                         potentials, g0.k_, g1.k_, pz - cg0.cz_, pz - nuc.z, z_ab, p);
 
-                    sum += g0.c_ * g1.c_ * static_cast<double>(nuc.charge) * potentials[0];
+                    assert(potentials.size() == 1);
+
+                    sum += g0.c_ * g1.c_ * potentials[0];
                 }
             assert(!std::isnan(sum));
 
-            potential(r, s) = sum;
+            potential(r, s) = static_cast<double>(nuc.charge) * sum;
         }
     return potential;
 }
@@ -548,7 +550,7 @@ double hf::HFSolver::solve(double tolerance)
     auto kinEnergy = calcKineticEnergy();
 
     std::vector<Matrix> potentials(m_nuclei.size());
-    for (int i = 0; i < static_cast<int>(potentials.size()); i++)
+    for (size_t i = 0; i < potentials.size(); i++)
         potentials[i] = calcPotential(i);
 
     Matrix hcore = kinEnergy;
@@ -614,6 +616,7 @@ double hf::HFSolver::solve(double tolerance)
     int iterations = 0;
 
     Matrix prevFock = calcElectronRepulsion(repulsionIntegrals, density) + hcore;
+    Matrix prevDensity;
 
     do {
         // std::cout << "ITERATION " << iterations << ":\n";
@@ -640,7 +643,7 @@ double hf::HFSolver::solve(double tolerance)
         std::cout << '\n';*/
 
         // Update density matrix.
-        auto prevDensity = density;
+        prevDensity = density;
         density = 0.8 * calcDensity(m_coeff) + 0.2 * prevDensity;
         maxDelta = (prevDensity - density).cwiseAbs().maxCoeff();
 
@@ -660,7 +663,7 @@ double hf::HFSolver::solve(double tolerance)
 
     for (int r = 0; r < m_basisSize; r++)
         for (int s = 0; s < m_basisSize; s++)
-            HFEnergy += 0.5 * density(r, s) * hcore(r, s);
+            HFEnergy += 0.5 * prevDensity(r, s) * hcore(r, s);
 
     std::cout << "HF-Energy = " << HFEnergy << '\n';
 

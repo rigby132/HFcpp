@@ -572,7 +572,9 @@ double hf::HFSolver::solve(double tolerance)
     for (int i = 0; i < m_basisSize; i++)
         if (D(i, i) < 10e-5)
             valuesToRemove++;
-    std::cout << valuesToRemove << " basis functions were removed for numerical stability.\n";
+    
+    if(valuesToRemove > 0)
+        std::cout << valuesToRemove << " basis function(s) were removed for numerical stability.\n";
 
     // Abort if true;
     if (valuesToRemove >= m_basisSize or m_basisSize - valuesToRemove < m_occupied) {
@@ -659,7 +661,7 @@ double hf::HFSolver::solve(double tolerance)
     for (int i = 0; i < m_occupied; i++)
         HFEnergy += solver.eigenvalues()(i);
 
-    std::cout << "E-Levels:\n" << solver.eigenvalues() << '\n';
+    std::cout << "Orbital Energies:\n" << solver.eigenvalues() << '\n';
 
     for (int r = 0; r < m_basisSize; r++)
         for (int s = 0; s < m_basisSize; s++)

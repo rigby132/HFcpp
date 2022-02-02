@@ -51,16 +51,15 @@ int main(int argc, const char** argv)
         ->default_val(0.1)
         ->check(CLI::PositiveNumber);
 
-    std::string outputFile;
+    std::string outputDensityName;
     app.add_option(
-           "-o,--output", outputFile, "Name of the output file for orbital data.")
-        ->default_val("data.out");
+           "-d,--density", outputDensityName, "Output orbital densities as a .cube file.")
+        ->default_val("density.cube");
 
-    app.add_flag("--vdk", "Output orbital densities as a .vdk file.");
-
-    app.add_flag("--cube", "Output orbital data (wavefunction unless specified otherwise) as a .cube file.");
-
-    app.add_flag("--density", "Output orbital data as densities.");
+    std::string outputWaveName;
+    app.add_option(
+           "-w,--wave", outputWaveName, "Output orbital wavefunctions as a .cube file.Name of the output file for orbital data.")
+        ->default_val("wave.cube");
 
     try {
         app.parse(argc, argv);
@@ -78,17 +77,13 @@ int main(int argc, const char** argv)
     hf::HFSolver solver(basis, structure, occupation);
     solver.solve(tolerance);
 
-    if (app.count("--vdk") > 0){
-        std::cout << "WRITING VDK OUTPUT...\n";
-        hf::writeOrbitalsVDK<double>(solver, outputFile, buffer, 120);
-    }
-
-    if (app.count("--cube") > 0){
+    if (app.count("-d") + app.count("--density") + app.count("-w") + app.count("--wave")> 0){
         std::cout << "WRITING CUBE OUTPUT...\n";
-        if(app.count("--density") > 0)
-            hf::writeOrbitalsCUBE<double>(solver, outputFile, buffer, spacing, true);
-        else
-            hf::writeOrbitalsCUBE<double>(solver, outputFile, buffer, spacing, false);
+
+        if(app.count("--density") + app.count("-d") > 0)
+            hf::writeOrbitalsCUBE<double>(solver, outputDensityName, buffer, spacing, true);
+        if(app.count("--wave") + app.count("-w") > 0)
+            hf::writeOrbitalsCUBE<double>(solver, outputWaveName, buffer, spacing, false);
     }
 
     return 0;

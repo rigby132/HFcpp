@@ -46,18 +46,21 @@ int main(int argc, const char** argv)
         ->check(CLI::PositiveNumber);
 
     double spacing;
-    app.add_option(
-           "--space", spacing, "The size of each volume element in the output file.")
+    app.add_option("--space", spacing, "The size of each volume element in the output file.")
         ->default_val(0.1)
         ->check(CLI::PositiveNumber);
 
     std::string outputDensityName;
-    app.add_option(
-           "-d,--density", outputDensityName, "Output orbital densities as a .cube file.");
+    app.add_option("-d,--density", outputDensityName, "Output orbital densities as a .cube file.");
 
     std::string outputWaveName;
-    app.add_option(
-           "-w,--wave", outputWaveName, "Output orbital wavefunctions as a .cube file.");
+    app.add_option("-w,--wave", outputWaveName, "Output orbital wavefunctions as a .cube file.");
+
+    int numberOfOrbitals;
+    app.add_option("-o,--orbitals", numberOfOrbitals,
+           "Number of smallest energy orbitals to include in output.")
+        ->default_val(0)
+        ->check(CLI::NonNegativeNumber);
 
     try {
         app.parse(argc, argv);
@@ -75,13 +78,13 @@ int main(int argc, const char** argv)
     hf::HFSolver solver(basis, structure, occupation);
     solver.solve(tolerance);
 
-    if (app.count("-d") + app.count("--density") + app.count("-w") + app.count("--wave")> 0){
+    if (app.count("-d") + app.count("--density") + app.count("-w") + app.count("--wave") > 0) {
         std::cout << "WRITING CUBE OUTPUT...\n";
 
-        if(app.count("--density") + app.count("-d") > 0)
-            hf::writeOrbitalsCUBE<double>(solver, outputDensityName, buffer, spacing, true);
-        if(app.count("--wave") + app.count("-w") > 0)
-            hf::writeOrbitalsCUBE<double>(solver, outputWaveName, buffer, spacing, false);
+        if (app.count("--density") + app.count("-d") > 0)
+            hf::writeOrbitalsCUBE<double>(solver, outputDensityName, buffer, spacing, true, numberOfOrbitals);
+        if (app.count("--wave") + app.count("-w") > 0)
+            hf::writeOrbitalsCUBE<double>(solver, outputWaveName, buffer, spacing, false, numberOfOrbitals);
     }
 
     return 0;

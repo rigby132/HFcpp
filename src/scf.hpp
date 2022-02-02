@@ -87,6 +87,5 @@ public:
 
 private:
     Matrix m_coeff;
-
 };
 }

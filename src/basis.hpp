@@ -42,7 +42,7 @@ template <typename T = double> struct Nucleus {
 
 /**
  * @brief Gaussian Type Orbital, represents a single Orbital function.
- * 
+ *
  * @tparam FLOAT The floating point type to use.
  */
 template <typename FLOAT = double> class GTO {

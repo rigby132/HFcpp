@@ -572,8 +572,8 @@ double hf::HFSolver::solve(double tolerance)
     for (int i = 0; i < m_basisSize; i++)
         if (D(i, i) < 10e-5)
             valuesToRemove++;
-    
-    if(valuesToRemove > 0)
+
+    if (valuesToRemove > 0)
         std::cout << valuesToRemove << " basis function(s) were removed for numerical stability.\n";
 
     // Abort if true;
@@ -594,13 +594,13 @@ double hf::HFSolver::solve(double tolerance)
         for (int j = valuesToRemove; j < m_basisSize; j++)
             Ptrunc(i, j - valuesToRemove) = P(i, j);
 
-    //std::cout << "Overlap eigenvalues: \n";
-    //for (int i = 0; i < m_basisSize; i++)
-    //    std::cout << D(i, i) << '\n';
-    //std::cout << '\n';
+    // std::cout << "Overlap eigenvalues: \n";
+    // for (int i = 0; i < m_basisSize; i++)
+    //     std::cout << D(i, i) << '\n';
+    // std::cout << '\n';
 
-    //std::cout << "Truncated overlap matrices:\n" << Dtrunc << "\n\n" << Ptrunc;
-    // Use truncated matrices from now on. 
+    // std::cout << "Truncated overlap matrices:\n" << Dtrunc << "\n\n" << Ptrunc;
+    //  Use truncated matrices from now on.
     D = Dtrunc;
     P = Ptrunc;
 
@@ -610,7 +610,7 @@ double hf::HFSolver::solve(double tolerance)
     // Matrix overlap_inv = P * D * P.adjoint();
     Matrix transform = P * D;
     // std::cout << "OVERLAP_INV:\n" << overlap_inv << '\n';
-    //std::cout << "TRANSFORM:\n" << transform << '\n';
+    // std::cout << "TRANSFORM:\n" << transform << '\n';
 
     auto repulsionIntegrals = calcRepulsionIntegrals();
 

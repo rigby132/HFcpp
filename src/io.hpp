@@ -233,12 +233,15 @@ void writeOrbitalsVDK(
 
 template <typename FLOAT = double>
 void writeOrbitalsCUBE(const HFSolver& solver, const std::string& path, const FLOAT space,
-    const FLOAT spacing, const bool exportDensity)
+    const FLOAT spacing, const bool exportDensity, int numberOfOrbitals)
 {
     std::ofstream fileStream(path);
 
     if (!fileStream.is_open())
         throw std::invalid_argument("Could not open file");
+
+    if (numberOfOrbitals == 0)
+        numberOfOrbitals = solver.m_basisSize;
 
     // Standard comments in header.
     fileStream << "CPMD CUBE FILE.\n"
@@ -290,8 +293,8 @@ void writeOrbitalsCUBE(const HFSolver& solver, const std::string& path, const FL
                    << nucleus.z << '\n';
 
     // Add Orbital indexing
-    fileStream << solver.m_basisSize << '\n';
-    for (int i = 0; i < solver.m_basisSize; i++)
+    fileStream << numberOfOrbitals << '\n';
+    for (int i = 0; i < numberOfOrbitals; i++)
         fileStream << i << '\n';
 
     // Add data set for each orbital.
@@ -299,7 +302,7 @@ void writeOrbitalsCUBE(const HFSolver& solver, const std::string& path, const FL
         for (int x = 0; x < pointsX; x++)
             for (int y = 0; y < pointsY; y++) {
                 for (int z = 0; z < pointsZ; z++)
-                    for (int i = 0; i < solver.m_basisSize; i++) {
+                    for (int i = 0; i < numberOfOrbitals; i++) {
                         FLOAT ro = solver.orbital(spacing * x + minX - space,
                             spacing * y + minY - space, spacing * z + minZ - space, i);
 
@@ -316,7 +319,7 @@ void writeOrbitalsCUBE(const HFSolver& solver, const std::string& path, const FL
         for (int x = 0; x < pointsX; x++)
             for (int y = 0; y < pointsY; y++) {
                 for (int z = 0; z < pointsZ; z++)
-                    for (int i = 0; i < solver.m_basisSize; i++) {
+                    for (int i = 0; i < numberOfOrbitals; i++) {
                         FLOAT ro = solver.orbital(spacing * x + minX - space,
                             spacing * y + minY - space, spacing * z + minZ - space, i);
 

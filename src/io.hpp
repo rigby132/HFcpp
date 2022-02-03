@@ -301,23 +301,20 @@ void writeOrbitalsCUBE(const HFSolver& solver, const std::string& path, const FL
     if (exportDensity)
         for (int x = 0; x < pointsX; x++)
             for (int y = 0; y < pointsY; y++) {
-                bool newlined = false;
                 for (int z = 0; z < pointsZ; z++)
                     for (int i = 0; i < numberOfOrbitals; i++) {
                         FLOAT ro = solver.orbital(spacing * x + minX - space,
                             spacing * y + minY - space, spacing * z + minZ - space, i);
 
                         fileStream << ro * ro;
-                        newlined = false;
 
                         if ((z * numberOfOrbitals + i) % 6 == 5) {
-                            newlined = true;
-                            fileStream << '\n';
+                            if (z + 1 < pointsZ or i + 1 < numberOfOrbitals)
+                                fileStream << '\n';
                         } else
                             fileStream << ' ';
                     }
-                if (!newlined)
-                    fileStream << '\n';
+                fileStream << '\n';
             }
     else
         for (int x = 0; x < pointsX; x++)
@@ -329,8 +326,10 @@ void writeOrbitalsCUBE(const HFSolver& solver, const std::string& path, const FL
 
                         fileStream << ro;
 
-                        if ((z * numberOfOrbitals + i) % 6 == 5)
-                            fileStream << '\n';
+                        if ((z * numberOfOrbitals + i) % 6 == 5) {
+                            if (z + 1 < pointsZ or i + 1 < numberOfOrbitals)
+                                fileStream << '\n';
+                        }
                         else
                             fileStream << ' ';
                     }

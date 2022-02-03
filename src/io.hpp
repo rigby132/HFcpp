@@ -308,9 +308,10 @@ void writeOrbitalsCUBE(const HFSolver& solver, const std::string& path, const FL
 
                         fileStream << ro * ro;
 
-                        if ((z * numberOfOrbitals + i) % 6 == 5)
-                            fileStream << '\n';
-                        else
+                        if ((z * numberOfOrbitals + i) % 6 == 5) {
+                            if (z + 1 < pointsZ or i + 1 < numberOfOrbitals)
+                                fileStream << '\n';
+                        } else
                             fileStream << ' ';
                     }
                 fileStream << '\n';

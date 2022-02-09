@@ -661,6 +661,7 @@ double hf::HFSolver::solve(double tolerance)
     for (int i = 0; i < m_occupied; i++)
         HFEnergy += solver.eigenvalues()(i);
 
+    std::cout << std::fixed << std::setprecision(7);
     std::cout << "Orbital Energies:\n" << solver.eigenvalues() << '\n';
 
     for (int r = 0; r < m_basisSize; r++)

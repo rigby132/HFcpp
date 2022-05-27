@@ -2,10 +2,10 @@
  * @file basis.hpp
  * @author Deniz Güven (s0394473@uni-frankfurt.de)
  * @brief Implements cgto basis functions.
- * @version 0.1
- * @date 2021-04-01
+ * @version 1.0
+ * @date 2022-05-27
  *
- * @copyright Copyright (c) 2021
+ * @copyright Copyright (c) 2022
  *
  */
 

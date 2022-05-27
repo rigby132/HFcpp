@@ -2,10 +2,10 @@
  * @file scf.hpp
  * @author Deniz Güven (s0394473@uni-frankfrut.de)
  * @brief Implements a hartree-fock solver.
- * @version 0.1
- * @date 2021-03-15
+ * @version 1.0
+ * @date 2022-05-27
  *
- * @copyright Copyright (c) 2021
+ * @copyright Copyright (c) 2022
  *
  */
 

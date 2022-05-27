@@ -1,3 +1,14 @@
+/**
+ * @file main.cpp
+ * @author Deniz Güven (s0394473@uni-frankfrut.de)
+ * @brief Handles CLI input and starts computation.
+ * @version 1.0
+ * @date 2022-05-27
+ * 
+ * @copyright Copyright (c) 2022
+ * 
+ */
+
 #include "basis.hpp"
 #include "boys.hpp"
 #include "io.hpp"

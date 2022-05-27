@@ -2,10 +2,10 @@
  * @file io.hpp
  * @author Deniz Güven (s0394473@uni-frankfurt.de)
  * @brief Defines functions for input and output.
- * @version 0.1
- * @date 2021-07-11
+ * @version 1.0
+ * @date 2022-05-27
  *
- * @copyright Copyright (c) 2021
+ * @copyright Copyright (c) 2022
  *
  */
 
@@ -28,6 +28,7 @@
 
 namespace hf {
 
+// TODO expand?
 const std::map<std::string, int> ATOMIC_CHARGES
     = { { "H", 1 }, { "He", 2 }, { "HE", 2 }, { "Li", 3 }, { "LI", 3 }, { "Be", 4 }, { "BE", 4 },
           { "B", 5 }, { "C", 6 }, { "N", 7 }, { "O", 8 }, { "F", 9 } };
@@ -159,6 +160,7 @@ std::vector<CGTO<FLOAT>> readBasisFromFile(
     return basis;
 }
 
+// Legacy format, TODO update or remove.
 template <typename FLOAT = double>
 void writeOrbitalsVDK(
     const HFSolver& solver, const std::string& path, const FLOAT space, const int points)
@@ -316,7 +318,7 @@ void writeOrbitalsCUBE(const HFSolver& solver, const std::string& path, const FL
                     }
                 fileStream << '\n';
             }
-    else
+    else // Export wavefunction.
         for (int x = 0; x < pointsX; x++)
             for (int y = 0; y < pointsY; y++) {
                 for (int z = 0; z < pointsZ; z++)

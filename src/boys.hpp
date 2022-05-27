@@ -2,10 +2,10 @@
  * @file boys.hpp
  * @author Deniz Güven
  * @brief Implements the Boys-function.
- * @version 0.1
- * @date 2021-04-15
+ * @version 1.0
+ * @date 2022-05-27
  *
- * @copyright Copyright (c) 2021
+ * @copyright Copyright (c) 2022
  *
  */
 

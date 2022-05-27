@@ -2,10 +2,10 @@
  * @file scf.cpp
  * @author Deniz Güven (s0394473@uni-frankfrut.de)
  * @brief Defines various functions for the scf method.
- * @version 0.1
- * @date 2021-07-11
+ * @version 1.0
+ * @date 2022-05-27
  *
- * @copyright Copyright (c) 2021
+ * @copyright Copyright (c) 2022
  *
  */
 
@@ -24,7 +24,7 @@
 #include <cstddef>
 #include <limits>
 
-// TODO REMOVE!
+// For text output during computation.
 #include <cstdio>
 #include <iomanip>
 #include <iostream>
@@ -60,22 +60,37 @@ hf::Matrix hf::HFSolver::calcDensity(const Matrix& coeff)
     return density;
 }
 
+/**
+ * @brief Calculates a single overlap integral for the specified primitive GTOs.
+ *
+ * @tparam FLOAT The floating point type to use.
+ * @param a The exponent of GTO a.
+ * @param b The exponent of GTO b.
+ * @param a_x The center coordinate of GTO a.
+ * @param b_x The center coordinate of GTO b.
+ * @param qa The orbital anulgar momentum quantum number of GTO a.
+ * @param qb The orbital anulgar momentum quantum number of GTO b.
+ *
+ * @return The Integral of GTOa * GTOb over -inf & +inf.
+ */
 template <typename FLOAT = double>
 FLOAT calcSingleOverlap(
     const FLOAT a, const FLOAT b, const FLOAT a_x, FLOAT b_x, const size_t qa, const size_t qb)
 {
+    // Ensure qa is always larger/equal qb.
+    if (qb > qa)
+        return calcSingleOverlap(b, a, b_x, a_x, qb, qa);
+
     // Some useful constants
     const FLOAT p = a + b;
     const FLOAT mu = a * b / p;
-    // const FLOAT p_x = (a * a_x + b * b_x) / p;
     const FLOAT x_ab = a_x - b_x;
     const FLOAT k_ab = std::exp(-mu * x_ab * x_ab);
     const FLOAT x_pa = -b * x_ab / p;
     const FLOAT x_pb = a * x_ab / p;
-
-    // Overlap integrals (over product of 2 GTOs) for all quantum numbers up to S_ij.
     constexpr auto nan = std::numeric_limits<FLOAT>::quiet_NaN();
 
+    // Overlap integrals for all quantum numbers up to S_ij.
     std::vector<std::vector<FLOAT>> S(
         qa >= 2 ? qa + 1 : 2, std::vector<FLOAT>(qb >= 2 ? qb + 1 : 2, nan));
     S[0][0] = std::sqrt(PI / p) * k_ab;
@@ -83,31 +98,17 @@ FLOAT calcSingleOverlap(
     S[0][1] = x_pb * S[0][0];
     S[1][1] = x_pa * S[0][1] + 0.5 * S[0][0] / p;
 
-    if (qa >= qb) {
-        // Fill S with values for all i  and j = 0 and 1.
-        for (size_t i = 2; i <= qa; i++) {
-            S[i][0] = x_pa * S[i - 1][0] + (0.5 / p) * (i - 1.0) * S[i - 2][0];
-            S[i][1] = x_pa * S[i - 1][1] + (0.5 / p) * ((i - 1.0) * S[i - 2][1] + S[i - 1][0]);
-        }
-
-        // Move up to reach j = qb by recursion.
-        for (size_t j = 2; j <= qb; j++)
-            for (size_t i = qa - qb + j; i <= qa; i++)
-                S[i][j] = x_pb * S[i][j - 1]
-                    + (i * S[i - 1][j - 1] + (j - 1.0) * S[i][j - 2]) / (2 * p);
-    } else {
-        // Fill S with values for all j  and i = 0 and 1.
-        for (size_t j = 2; j <= qb; j++) {
-            S[0][j] = x_pb * S[0][j - 1] + (0.5 / p) * (j - 1.0) * S[0][j - 2];
-            S[1][j] = x_pb * S[1][j - 1] + (0.5 / p) * ((j - 1.0) * S[1][j - 2] + S[0][j - 1]);
-        }
-
-        // Move up to reach i = qa by recursion.
-        for (size_t i = 2; i <= qa; i++)
-            for (size_t j = qb - qa + i; j <= qb; j++)
-                S[i][j] = x_pa * S[i - 1][j]
-                    + ((i - 1.0) * S[i - 2][j] + j * S[i - 1][j - 1]) / (2 * p);
+    // Fill S with values for all i and j = 0 and 1.
+    for (size_t i = 2; i <= qa; i++) {
+        S[i][0] = x_pa * S[i - 1][0] + (0.5 / p) * (i - 1.0) * S[i - 2][0];
+        S[i][1] = x_pa * S[i - 1][1] + (0.5 / p) * ((i - 1.0) * S[i - 2][1] + S[i - 1][0]);
     }
+
+    // Move up to reach j = qb by recursion.
+    for (size_t j = 2; j <= qb; j++)
+        for (size_t i = qa - qb + j; i <= qa; i++)
+            S[i][j]
+                = x_pb * S[i][j - 1] + (i * S[i - 1][j - 1] + (j - 1.0) * S[i][j - 2]) / (2 * p);
 
     return S[qa][qb];
 }
@@ -148,7 +149,7 @@ hf::Matrix hf::HFSolver::calcOverlap()
  * @param qa The orbital anulgar momentum quantum number of GTO a.
  * @param qb The orbital anulgar momentum quantum number of GTO b.
  *
- * @return The Integral of GTOa * GTOb over -inf & +inf.
+ * @return The kinetic energy Integral of GTOa * GTOb over -inf & +inf.
  */
 template <typename FLOAT = double>
 FLOAT calcSingleKinEnergy(const FLOAT a, const FLOAT b, const FLOAT a_x, const FLOAT b_x,
@@ -428,6 +429,7 @@ hf::Repulsions hf::HFSolver::calcRepulsionIntegrals()
 {
     constexpr double nan = std::numeric_limits<double>::quiet_NaN();
 
+    // Allocate space for integrals.
     Repulsions integrals(static_cast<size_t>(m_basisSize));
 
     for (auto& lvl1 : integrals) {
@@ -439,7 +441,7 @@ hf::Repulsions hf::HFSolver::calcRepulsionIntegrals()
         }
     }
 
-#pragma omp parallel for schedule(guided)
+#pragma omp parallel for schedule(guided) collapse(4)
     for (int r = 0; r < m_basisSize; r++)
         for (int s = 0; s < m_basisSize; s++)
             for (int t = 0; t < m_basisSize; t++)
@@ -490,6 +492,7 @@ hf::Repulsions hf::HFSolver::calcRepulsionIntegrals()
 
                                     std::vector<double> integral(qsum + 1, nan);
 
+                                    // Fill in starting values for recursion.
                                     for (int n = 0; n <= qsum; n++)
                                         integral[n]
                                             = f * k_ab * k_cd * boys(n, p * q * dist2_pq / (p + q));

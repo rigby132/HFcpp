@@ -4,9 +4,9 @@
  * @brief Handles CLI input and starts computation.
  * @version 1.0
  * @date 2022-05-27
- * 
+ *
  * @copyright Copyright (c) 2022
- * 
+ *
  */
 
 #include "basis.hpp"
@@ -27,7 +27,7 @@
 int main(int argc, const char** argv)
 {
 
-    CLI::App app { "HFcpp, a ground state energy solver using the Hartree-Fock method." };
+    CLI::App app { "HFcpp, a Hartree-Fock energy solver using the SCF method." };
 
     std::string structureFile;
     app.add_option("-s,--structure", structureFile,
@@ -93,9 +93,11 @@ int main(int argc, const char** argv)
         std::cout << "WRITING CUBE OUTPUT...\n";
 
         if (app.count("--density") + app.count("-d") > 0)
-            hf::writeOrbitalsCUBE<double>(solver, outputDensityName, buffer, spacing, true, numberOfOrbitals);
+            hf::writeOrbitalsCUBE<double>(
+                solver, outputDensityName, buffer, spacing, true, numberOfOrbitals);
         if (app.count("--wave") + app.count("-w") > 0)
-            hf::writeOrbitalsCUBE<double>(solver, outputWaveName, buffer, spacing, false, numberOfOrbitals);
+            hf::writeOrbitalsCUBE<double>(
+                solver, outputWaveName, buffer, spacing, false, numberOfOrbitals);
     }
 
     return 0;
